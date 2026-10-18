@@ -1,0 +1,120 @@
+[
+  {
+    "slide": 1,
+    "title": "Geometry-Constrained Bowl Manipulation",
+    "notes_zh": "本项目围绕规则圆碗的视觉抓取和指定位置放置展开。除了实现“看到碗、夹起来、放下去”，本阶段重点研究抓取方位变化时，如何尽量保持碗与夹爪之间的相对关系。汇报分为几何原理、完整任务执行和实验证据三个部分。封面使用 9 月 23 日的真实抬碗照片，用于展示硬件平台和抓取场景；这张早期照片不作为后续径向方法的对比验证。",
+    "sources": [
+      "docs/圆碗径向抓取修改_20260928.md",
+      "debug_output/planning_diagnosis_20260923/white_lifted.jpg"
+    ]
+  },
+  {
+    "slide": 2,
+    "title": "A Fixed Tool Pose Does Not Fix the Bowl Center",
+    "notes_zh": "首先解释为什么只把所有释放点设置成相同 RPY，并不能保证每次落在同一个位置。示教和运动控制约束的是工具位姿，而碗中心还取决于夹爪夹住了碗的哪个位置、以什么方向和深度夹住。接触关系不同，工具到碗中心的偏移就可能不同。这里使用的是 AI 生成的接触示意，不是两次实际实验，也不表示测得了某个偏移量。我们要做的是先稳定抓取关系，再研究放置误差。",
+    "sources": [
+      "docs/圆碗径向抓取修改_20260928.md",
+      "assets/contact_geometry.png (AI-generated illustration)"
+    ]
+  },
+  {
+    "slide": 3,
+    "title": "Radial Alignment with Fixed Finger Assignment",
+    "notes_zh": "核心约束包括两个部分：夹爪闭合轴沿圆心到碗沿的径向，同一个物理手指始终在碗外。用户已经通过照片和 RViz 确认左指对应工具正 Y，因此当前配置保持左外右内。这样可以减少不同抓取方位以及方向翻转造成的相对关系变化。圆碗的旋转对称性并不意味着带工具偏置和线缆的实际夹爪可以随意翻转。固定抓取高度、深度和避免滑动同样是这一设计成立的前提。",
+    "sources": [
+      "docs/left_finger_reference_20260928.jpeg",
+      "docs/left_finger_positive_y_rviz_20260928.png",
+      "src/rim_locator/rim_locator/rim_detection.py"
+    ]
+  },
+  {
+    "slide": 4,
+    "title": "Global Shape Guides, Local Geometry Validates",
+    "notes_zh": "这里的设计将整体形状和局部接触分工。圆拟合提供圆心、半径以及有符号的径向方向；局部碗壁搜索验证该位置是否存在可靠的接触证据。实现中会比较不同尺度的局部法线，并检查点数、高度跨度、残差和方向一致性。圆模型通过后，候选还要满足接触半径误差与壁面方向偏差条件。重要的是，输出抓取点保留真实观测位置，不把点移动到拟合圆周上。图来自保存点云的实际算法回放。",
+    "sources": [
+      "src/rim_locator/rim_locator/circle_fit.py",
+      "src/rim_locator/rim_locator/rim_detection.py",
+      "debug_output/circle_radial_replay_final_20260928/radial_grasps.svg"
+    ]
+  },
+  {
+    "slide": 5,
+    "title": "Handling Partial Rim Observations",
+    "notes_zh": "部分观测下，碗的实例分割可能完整，但可用于几何拟合的顶部深度点只覆盖一段圆弧。当前方法优先使用通过检查的圆心径向；只有圆弧覆盖或占用角度区间不足时，才采用有多尺度壁面支持的局部方向。备用分支不利用已被拒绝的短弧圆心来决定方向。这里左图对应实时规划预览，圆弧约 103 度，生成了 8 个候选并完成七段规划；旁边的几何图来自同次调试归档中的独立新采样，不能当成同一帧。它们均不代表本次进行了实机抓取。",
+    "sources": [
+      "docs/圆碗径向抓取修改_20260928.md",
+      "debug_output/circle_wall_fallback_20260928/live_plan/result.json",
+      "debug_output/circle_wall_fallback_20260928/fresh_geometry/radial_grasps.svg"
+    ]
+  },
+  {
+    "slide": 6,
+    "title": "Why Grasp Consistency Helps Placement",
+    "notes_zh": "这个式子是汇报中解释设计原理的重点。释放时碗中心等于工具位置，加上经工具姿态旋转后的工具到碗中心偏移。示教固定工具位置和姿态，径向抓取以及固定手指身份尝试让相对偏移保持一致。对于相同圆碗，在固定夹持高度、深度且不滑动的理想情况下，不同方位抓取可以获得相近的工具坐标系中心偏移。实际中仍有深度误差、接触变形和标定偏差。目前程序没有实现基于每次估计偏移的在线释放补偿，这里解释的是设计依据。",
+    "sources": [
+      "docs/圆碗径向抓取修改_20260928.md",
+      "src/grasp_executor/grasp_executor/grasp.py",
+      "src/grasp_executor/config/place_zones.json"
+    ]
+  },
+  {
+    "slide": 7,
+    "title": "Select Grasps for the Entire Task",
+    "notes_zh": "局部几何合格只是第一步。程序对同一只碗生成有限数量的候选，并检查完整七段抓放返程路径。候选在尚未运动时不可规划，就可以尝试下一个；一旦动作开始，失败不会自动从张爪步骤重新抓取。返回起点使用保存的关节配置，避免相同末端位姿对应不同关节分支。右图叠加的是应用抓取偏移后的目标位姿，execution_started 只表示已经开始执行相关候选，并不能作为实测到位或抓牢的证明。",
+    "sources": [
+      "src/grasp_executor/grasp_executor/candidates.py",
+      "src/grasp_executor/grasp_executor/moveit_ros.py",
+      "debug_output/place_execution/20260929_142644/round_0001/grasp_pose_overlay.png"
+    ]
+  },
+  {
+    "slide": 8,
+    "title": "Execution Advances on Measured State",
+    "notes_zh": "夹爪部分从命令和固定等待，改为校验控制寄存器、开口位置及稳定时间。示例日志中，闭合从 679 变为 37，释放打开从 24 变为 680；这证明反馈状态发生变化，不直接证明碗被夹牢。机械臂正常使用 TF，在 TF 暂时不可用时使用新鲜六关节测量和已交叉核验的本地正运动学。启动核验、反馈新鲜度和到位条件继续生效。TF 故障注入结果来自隔离模拟控制器，没有连接机器人硬件，不能把模拟恢复当作已经完成所有实机故障验证。",
+    "sources": [
+      "src/grasp_executor/grasp_executor/gripper_command.py",
+      "debug_output/place_execution/20260928_211216/round_0003/grasp_executor.log",
+      "docs/TF反馈恢复_20260929.md",
+      "debug_output/tf_feedback_recovery_20260929/validation_summary.json"
+    ]
+  },
+  {
+    "slide": 9,
+    "title": "Offline Replay Results",
+    "notes_zh": "第一组有 20 份历史点云，圆弧覆盖条件调整后，生成有效候选的帧数从 14 增加到 18。第二组有 27 份点云，在加入有支持的局部碗壁备用分支后，从 23 增加到 27。这是两个不同数据集、不同阶段的回放结果，不能把两个数列直接串成同一组实验。两侧是该项目实际回放可视化，目的是说明候选来源；数字以保存的 JSON 汇总为依据。这些结果支持候选生成可用性的改善，但不是抓取成功率，也没有证明当前版本在新场景中百分之百可用。",
+    "sources": [
+      "debug_output/circle_partial_arc_fix_20260928/replay.json",
+      "debug_output/circle_wall_fallback_20260928/replay.json"
+    ]
+  },
+  {
+    "slide": 10,
+    "title": "Hardware Demonstration and Implemented Capabilities",
+    "notes_zh": "这里展示三个独立任务保存的原始抓取位姿图，分别是 blue、左上和右下，图像并非同一次运动的连续帧。对应运行记录均有完整命令流程完成状态，但 grasp_verified 和 placement_verified 仍然为 false，所以不能直接把它们计作已独立验证的物理成功。功能方面，每次启动重新观察一只碗，按选择的示教目标完成放置、退回和返程。视觉增加桌面 ROI、分块推理及有限重观察，任务保存配置、候选和诊断图，便于逐次复现。",
+    "sources": [
+      "debug_output/place_execution/20260929_142046/result.json",
+      "debug_output/place_execution/20260929_142252/result.json",
+      "debug_output/place_execution/20260929_142644/result.json",
+      "New_run/README.md"
+    ]
+  },
+  {
+    "slide": 11,
+    "title": "Quantifying Placement Repeatability",
+    "notes_zh": "下一步实验应直接验证设计假设：在相同碗、相同目标位置和相同夹持高度深度下，径向方法是否比原壁面方向方法具有更小的放置误差。改变碗的起始位置和抓取方位，进行重复试验，分别记录检测失败、无候选、规划失败、夹空、掉落和放偏。落点指标使用碗中心到目标中心的平面距离，报告均值、离散程度和最大值。图是实际桌面观测，但当前没有系统测量的落点分布，因此不展示虚构误差图。",
+    "sources": [
+      "docs/圆碗径向抓取修改_20260928.md",
+      "debug_output/table_roi_update_20260928/after/rgb.png"
+    ]
+  },
+  {
+    "slide": 12,
+    "title": "Design Contributions and Next Milestone",
+    "notes_zh": "总结本项目的三项设计贡献：第一，用有符号径向和固定内外手指约束抓取关系；第二，用整体形状指导方向，同时用真实局部壁面验证接触；第三，以完整抓放返程可行性选择候选。这些是相对于项目原实现的设计改进，并不在本汇报中声称已完成学术首创性证明。反馈和诊断改进使方法能够在现有硬件上实施与复查。下一阶段要通过对比实验量化物理抓取成功和放置重复性。",
+    "sources": [
+      "docs/圆碗径向抓取修改_20260928.md",
+      "docs/demo_implementation_20260925.md",
+      "docs/TF反馈恢复_20260929.md"
+    ]
+  }
+]

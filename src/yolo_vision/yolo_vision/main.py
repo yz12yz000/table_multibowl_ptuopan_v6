@@ -14,14 +14,17 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from std_msgs.msg import String
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from .config import load_config, resolve_model_path
 from .pointcloud import extract_object_points, make_cloud, read_xyz, read_aligned_depth_xyz
-from .segmentation import Segmenter
+from .segmentation import Segmenter, TraySegmentationConfig
 from .sensor_input import SerializedSensor, raw_subscriber
-from .diagnostics import detection_debug
+from .diagnostics import detection_debug, projection_metadata
+from .tray_utils import detect_tray, estimate_object_position, load_tray_config
 
 
 def retained_qos():
@@ -52,11 +55,26 @@ class VisionNode(Node):
             share = Path(get_package_share_directory("yolo_vision"))
             path = self.declare_parameter("config_path", str(share / "config/config.json")).value
             self.config = load_config(path)
+            self.tray_config = None
+            self.tray_tf_error = None
+            if self.config.tray_config_path:
+                tray_path = Path(self.config.tray_config_path).expanduser()
+                if not tray_path.is_absolute():
+                    tray_path = share / tray_path
+                self.tray_config = load_tray_config(tray_path, require_calibrated=True)
+                self.tf_buffer = Buffer(node=self)
+                self.tf_listener = TransformListener(self.tf_buffer, self)
             self.publisher = self.create_publisher(PointCloud2, self.config.output_topic, retained_qos())
             self.bridge = CvBridge()
             if self.config.publish_debug:
                 self.mask_pub = self.create_publisher(Image, "~/mask", retained_qos())
                 self.overlay_pub = self.create_publisher(Image, "~/overlay", retained_qos())
+            self.tray_segmenter = None
+            if self.tray_config is not None:
+                tray_model_config = TraySegmentationConfig(**self.tray_config['yolo'])
+                self.tray_segmenter = Segmenter(
+                    resolve_model_path(tray_model_config, share), tray_model_config,
+                    require_target=True)
             self.segmenter = Segmenter(resolve_model_path(self.config, share), self.config)
             self.inputs = {}
             sensor_qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
@@ -95,8 +113,38 @@ class VisionNode(Node):
 
     def check_timeout(self):
         if self.state == "ready" and self.deadline_expired():
-            self.report("failed", failed_step="ready", reason="input_timeout",
-                        camera=self.camera_details())
+            VisionNode.report_input_timeout(self)
+
+    def report_input_timeout(self):
+        details = {}
+        if getattr(self, 'tray_tf_error', None):
+            details['tray'] = self.tray_tf_error
+        self.report("failed", failed_step="ready", reason="input_timeout",
+                    camera=self.camera_details(), **details)
+
+    def camera_to_base(self, header):
+        """Use acquisition-time TF, never a latest transform or an assumed frame."""
+        target_frame = self.tray_config['frame_id']
+        if header.frame_id == target_frame:
+            return np.eye(4)
+        value = self.tf_buffer.lookup_transform(
+            target_frame, header.frame_id, Time.from_msg(header.stamp)).transform
+        q = value.rotation
+        quaternion = np.asarray([q.x, q.y, q.z, q.w], dtype=float)
+        norm = float(np.linalg.norm(quaternion))
+        t = value.translation
+        translation = np.asarray([t.x, t.y, t.z], dtype=float)
+        if not np.isfinite(quaternion).all() or norm < 1e-12 or not np.isfinite(translation).all():
+            raise ValueError('invalid_tray_transform')
+        x, y, z, w = quaternion / norm
+        matrix = np.eye(4)
+        matrix[:3, :3] = [
+            [1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)],
+            [2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)],
+            [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)],
+        ]
+        matrix[:3, 3] = translation
+        return matrix
 
     def observe_input(self, name, message):
         previous = self.inputs.get(name, {})
@@ -126,7 +174,7 @@ class VisionNode(Node):
         if self.state != "ready":
             return
         if self.deadline_expired():
-            self.report("failed", failed_step="ready", reason="input_timeout")
+            VisionNode.report_input_timeout(self)
             return
         try:
             stamps = [m.header.stamp.sec * 1_000_000_000 + m.header.stamp.nanosec for m in (image, cloud)]
@@ -140,7 +188,9 @@ class VisionNode(Node):
                 # its timestamp is not an image acquisition freshness gate.
                 if any(stamp <= self.source_not_before_ns for stamp in stamps):
                     return
-            self.report("processing")  # Lock the job BEFORE any decoding/inference.
+            tray_config = getattr(self, 'tray_config', None)
+            if tray_config is None:
+                self.report("processing")  # Lock the job BEFORE any decoding/inference.
             if not cloud.header.frame_id.strip():
                 raise ValueError("empty_frame_id")
             shape = (image.height, image.width)
@@ -160,6 +210,23 @@ class VisionNode(Node):
                 info_stamp = camera_info.header.stamp.sec * 1_000_000_000 + camera_info.header.stamp.nanosec
                 if abs(info_stamp - stamps[1]) > self.config.sync_slop * 1e9:
                     raise ValueError("depth_camera_info_not_synchronized")
+            camera_to_base = None
+            if tray_config is not None:
+                try:
+                    camera_to_base = VisionNode.camera_to_base(self, cloud.header)
+                except TransformException as exc:
+                    # Let the single-threaded executor receive TF and retry with
+                    # a new synchronized pair. Do not restart the input budget.
+                    self.tray_tf_error = {'status': 'invalid', 'reason': 'tray_tf_unavailable',
+                                          'frame_id': tray_config['frame_id'], 'detail': str(exc),
+                                          'source_stamp_ns': stamps[1]}
+                    # This discarded frame is diagnostic only. A top-level
+                    # stamp identifies the final frozen observation and must
+                    # not conflict with a later candidate on another topic.
+                    self.report('ready', tray=self.tray_tf_error)
+                    return
+                self.tray_tf_error = None
+                self.report('processing')
             if isinstance(image, SerializedSensor):
                 image = image.decode()
             if isinstance(cloud, SerializedSensor):
@@ -170,11 +237,29 @@ class VisionNode(Node):
                 raise TimeoutError("input_timeout")
             xyz = (read_aligned_depth_xyz(cloud, camera_info) if self.config.depth_image_topic
                    else read_xyz(cloud))
+            tray_details = {}
+            if tray_config is not None:
+                if self.deadline_expired():
+                    raise TimeoutError("input_timeout")
+                # Keep tray instances out of the bowl cloud and infer them on
+                # the SAME frozen RGB frame, including when there are no bowls.
+                tray_results = self.tray_segmenter.predict_all(bgr)
+                if self.deadline_expired():
+                    raise TimeoutError("input_timeout")
+                # read_aligned_depth_xyz already validates CameraInfo frame,
+                # dimensions, rectification and intrinsics for registered RGB-D.
+                # Organized clouds carry the same calibrated pixel/XYZ mapping.
+                camera_matrix = (np.asarray(camera_info.k, dtype=float).reshape(3, 3)
+                                 if camera_info is not None else None)
+                tray_details['tray'] = detect_tray(
+                    bgr, xyz, tray_config, camera_matrix=camera_matrix,
+                    camera_to_base=camera_to_base, inference_roi=self.config.inference_roi,
+                    detections=tray_results, occluder_masks=[result.mask for result in results])
             if not results:
                 if self.deadline_expired():
                     raise TimeoutError("input_timeout")
                 self.report("no_targets", detected_count=0, object_count=0,
-                            reason="empty_detection", source_stamp_ns=stamps[1])
+                            reason="empty_detection", source_stamp_ns=stamps[1], **tray_details)
                 return
             all_points, all_ids, accepted, rejected = [], [], [], []
             occupied = np.zeros(xyz.shape[:2], dtype=bool)
@@ -190,6 +275,8 @@ class VisionNode(Node):
                 valid_count = int((mask & np.isfinite(xyz).all(axis=2) & (xyz[:, :, 2] > 0)).sum())
                 depth_details = dict(mask_pixels=mask_pixels, valid_depth_points=valid_count,
                                      valid_depth_ratio=valid_count/max(1, mask_pixels))
+                if tray_config is not None:
+                    depth_details.update(estimate_object_position(xyz[mask], camera_to_base, tray_config))
                 try:
                     points = extract_object_points(xyz, mask, self.config.min_points)
                 except ValueError as exc:
@@ -201,6 +288,7 @@ class VisionNode(Node):
                 all_ids.append(np.full(len(points), object_id, dtype=np.uint32))
                 accepted.append({"object_id": object_id, "point_count": len(points),
                                  "confidence": result.confidence, **depth_details})
+            projection_details = {}
             if self.config.publish_debug:
                 combined_mask, overlay = detection_debug(bgr, results, xyz)
                 mask_message = self.bridge.cv2_to_imgmsg(combined_mask, encoding="mono8")
@@ -211,17 +299,24 @@ class VisionNode(Node):
                     raise TimeoutError("input_timeout")
                 self.mask_pub.publish(mask_message)
                 self.overlay_pub.publish(overlay_message)
+                try:
+                    projection_details['camera_projection'] = projection_metadata(
+                        xyz, image.header, cloud.header, camera_info)
+                except Exception as exc:
+                    projection_details['camera_projection_error'] = str(exc)
             if self.deadline_expired():
                 raise TimeoutError("input_timeout")
             if not all_points:
                 self.report("failed", failed_step="processing", reason="no_valid_depth_for_detected_targets",
                             detected_count=len(results), object_count=0, rejected=rejected,
-                            source_stamp_ns=stamps[1])
+                            source_stamp_ns=stamps[1], **tray_details)
                 return
             output = make_cloud(cloud.header, np.concatenate(all_points), np.concatenate(all_ids))
             self.publisher.publish(output)
             self.report("success", detected_count=len(results), object_count=len(accepted), objects=accepted,
                         class_name=self.config.target_class, rejected=rejected,
+                        **projection_details,
+                        **tray_details,
                         source_stamp_ns=cloud.header.stamp.sec*1_000_000_000+cloud.header.stamp.nanosec,
                         rgb_depth_delta_s=abs((image.header.stamp.sec-cloud.header.stamp.sec) +
                                               (image.header.stamp.nanosec-cloud.header.stamp.nanosec)/1e9))

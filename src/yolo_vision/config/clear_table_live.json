@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "calibrated": true,
+  "calibration_note": "Measured tray inner 35x23 cm, outer 36x24 cm; fixed camera/table source polygon from 2026-10-10. Visual bowl geometry, no measured bowl sizes. Original blue release Z/orientation. 25 mm future placement allowance reflects prior observed error; release height and residual require validation for new bowls.",
+  "frame_id": "base",
+  "detector": "yolo",
+  "tray_size": [
+    0.35,
+    0.23
+  ],
+  "slots": [],
+  "bowl_radius": 0.04,
+  "edge_margin": 0.005,
+  "clearance": 0.005,
+  "position_tolerance": 0.025,
+  "depth_xy_tolerance": 0.008,
+  "refine_boundary": true,
+  "release_z": null,
+  "release_xy_offset": [
+    0.0,
+    0.0
+  ],
+  "source_polygon": [
+    [
+      -0.3699281670363909,
+      -0.6423096727798714
+    ],
+    [
+      -1.13253549155239,
+      0.03447160805996868
+    ],
+    [
+      -0.8925633200264423,
+      0.33707592701863814
+    ],
+    [
+      -0.10606223494926151,
+      -0.37353304433052215
+    ]
+  ],
+  "empty_confirmations": 2,
+  "yolo": {
+    "model_path": "models/yoloe-tray-live.pt",
+    "target_class": "tray",
+    "confidence": 0.5,
+    "imgsz": 960,
+    "device": "cpu"
+  },
+  "tray_outer_size": [
+    0.36,
+    0.24
+  ],
+  "known_bowl_radii": [],
+  "compensate_bowl_xy": true,
+  "object_geometry": "visual_rim",
+  "placement_mode": "grid",
+  "grid_step": 0.01,
+  "rim_outer_margin": 0.004,
+  "placement_match_tolerance": 0.05,
+  "placement_confirmations": 2
+}

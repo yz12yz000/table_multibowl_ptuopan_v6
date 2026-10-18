@@ -10,9 +10,10 @@ data_files = [
     ('share/' + package_name + '/config', glob('config/*.json')),
     ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
 ]
-# Preserve the directory structure of the checked-in OpenVINO model artifacts.
-model_root = Path('yolo26n-seg_openvino_model')
-if model_root.is_dir():
+# Preserve original bowl weights and optional locally supplied tray weights.
+for model_root in (Path('yolo26n-seg_openvino_model'), Path('models')):
+    if not model_root.is_dir():
+        continue
     for directory in [model_root, *sorted(p for p in model_root.rglob('*') if p.is_dir())]:
         files = sorted(str(p) for p in directory.iterdir() if p.is_file())
         if files:

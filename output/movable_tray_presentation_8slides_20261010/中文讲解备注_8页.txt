@@ -1,0 +1,73 @@
+YOLO可移动薄托盘收桌面：8页英文PPT中文讲解
+建议时长：约8–10分钟。
+讲解备注已写入PPT各页备注区；托盘定位图已更新为YOLO分割原理示意。
+
+第01页  Movable-tray clearing: one bowl at a time
+【中文讲解备注｜面向非专业听众】
+目标是把桌上的碗逐只放进可以移动的薄托盘。机器人每次只做一轮：看清桌面、量出位置、确认上一只、选择下一只和空位、按原方法抓放、回到起点。下一轮重新拍照，因为托盘和占用情况可能已经变化。第一轮没有上一只需要核查；最后一只放完，也要观察确认，不能仅凭动作结束就宣布收拾完成。托盘可以在两轮之间移动，动作期间要保持不动。
+
+【资料来源】
+tools/test_live_place_pipeline.py: run_clear_table
+tools/place_rounds.py: ClearTableSession.observe
+
+第02页  YOLO locates the tray; depth gives its physical position
+【中文讲解备注｜面向非专业听众】
+现在直接用 YOLO 识别托盘，不贴标记。分割模型像是在照片上描出托盘轮廓，再用同一帧深度和坐标转换，把像素换成实际的厘米位置。蓝色框是外轮廓，用实测外尺寸核对；绿色框是可放碗的内侧范围。公式表示托盘上的固定放置点随托盘转动和平移。原碗模型继续工作。特别要说明：现有模型没有托盘类别，需要另外提供训练好的托盘分割权重，当前图是原理示意，并非实际识别截图。
+
+【资料来源】
+src/yolo_vision/yolo_vision/tray_utils.py: detect_tray, slot_xy
+src/yolo_vision/config/clear_table_tray.json
+
+第03页  Pick outside the tray. Place only in verified free space.
+【中文讲解备注｜面向非专业听众】
+左边解决“抓哪只”：整只碗的占地范围都在托盘内，才算已经收好；它只占位置，不再抓。托盘外、且处于允许收拾区域内的碗，才是候选。压着边界或看不清时先重新观察。右边解决“放哪里”：预先设置几个宽松位置，按当前这只碗的大小检查离边缘和其他碗是否够远。刚用过的位置会保留，不能因为下一张图漏检就当成空位。新任务再根据现场观察重建占用。
+
+【资料来源】
+src/yolo_vision/yolo_vision/tray_utils.py: classify_object, choose_slot
+tools/place_rounds.py: ClearTableSession.observe, known_inside, used_positions
+
+第04页  Keep the motion sequence; update the destination XY
+【中文讲解备注｜面向非专业听众】
+碗怎么夹继续沿用原来的碗沿抓法，手指方向也不变。动作仍是七段：到碗上方、下降夹住、抬起、搬到放置准备点、下降释放、上退、回起点。图只表达先后顺序，不是真实机械臂轨迹。因为托盘很薄，沿用原桌面释放高度，主要更新左右、前后的位置。夹爪与碗中心的差别用固定水平偏移补偿；没有为每个抓取候选重算复杂放置姿态。原高度和姿态在任务开始时读取一次。
+
+【资料来源】
+docs/圆碗径向抓取修改_20260928.md
+tools/place_rounds.py: _release_coordinates, tray_release_config
+src/grasp_executor/grasp_executor/grasp.py
+src/grasp_executor/config/place_zones.json
+
+第05页  Confirm a changed scene before starting the next pick
+【中文讲解备注｜面向非专业听众】
+“动作完成”和“确认放好”是两回事。动作完成后先保留选中的位置；返回起点拍新图后，再检查三点：源位置的碗消失了、选中的空位出现新碗、托盘里原有的碗仍能对应上。这样可以避免把托盘里本来就有的碗误当作刚放下的碗。确认成功才增加归位数量，并继续下一只。结果不明确就有限次重新观察，不直接继续搬。
+
+【资料来源】
+tools/place_rounds.py: ClearTableSession.observe, record_motion
+tools/test_clear_table_policy.py
+
+第06页  The offline run completed three placements in five observations
+【中文讲解备注｜面向非专业听众】
+这五张图来自保存的模拟运行数据，使用相同坐标范围。蓝色是待收碗，绿色是托盘内的碗，黄色圈是选中的位置。第一轮选 B，第二轮确认第一只并选 C，第三轮确认第二只并选 D。第四轮确认第三只并首次看到源区域为空，第五轮再次确认空了才结束。原来已有碗的 A 位一直没有重复使用。托盘在轮次间也有轻微移动。结果为三只归位、五次观察；这里的感知和机械臂反馈均为模拟。
+
+【资料来源】
+debug_output/clear_table_validation/yolo_20261010/offline_demo/result.json
+debug_output/clear_table_validation/yolo_20261010/offline_demo/round_0001..0005/synthetic_observation.json
+
+第07页  Four checks protect detection and placement decisions
+【中文讲解备注｜面向非专业听众】
+这次重点检查四件事。第一，文件存在还不够，模型必须真的有托盘类别和轮廓输出；缺少时直接报错。第二，不能把只看见的一部分当成整个托盘，要核对完整边界、尺寸、深度和视野。第三，矩形长轴可能被程序反过来表示，已补上相邻轮次的方向衔接，避免空位编号突然对调。第四，放置间隔继续按当前碗的实际大小检查。测试使用合成输入；实际大幅转动或替换托盘无法靠矩形轮廓可靠区分。
+
+【资料来源】
+debug_output/clear_table_validation/yolo_20261010/summary.json
+tools/test_clear_table_runner.py
+tools/test_clear_table_policy.py
+src/yolo_vision/test/test_tray_utils.py
+
+第08页  Software checks passed; hardware trials are next
+【中文讲解备注｜面向非专业听众】
+三个 ROS 软件包构建成功，881 项回归与 7 项独立 ROS 控制测试通过，合计 888 项。右边另列通信、启动、退出清理和 MoveIt 规划检查，不代表实机成功率。现在没有连接设备，也未提供训练好的托盘模型；下一步先准备模型、量好尺寸和偏移，做规划预览，再从一只碗开始实测。本版要求单个长短边可区分的矩形薄托盘，两轮间小幅移动，动作期间不动；未新增三维碰撞场景。
+
+【资料来源】
+debug_output/clear_table_validation/yolo_20261010/summary.json
+debug_output/clear_table_validation/yolo_20261010/validation.log
+New_run/README.md
+src/yolo_vision/config/clear_table_tray.json

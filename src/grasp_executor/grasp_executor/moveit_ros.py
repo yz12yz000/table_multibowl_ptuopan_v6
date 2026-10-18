@@ -15,10 +15,11 @@ import time
 import xml.etree.ElementTree as ET
 
 from .cartesian import multiply, normalized, pose_error, rotate, tool_target_to_tip
-from .grasp import Pose, check_workspace
+from .grasp import Pose, check_workspace, build_return_home_pose
 from .trajectory import samples, seconds, slow_down, validate_trajectory
 from .ik_angles import nearest_equivalent_angles, revolute_bounds
 from .planning_errors import CandidatePlanRejected
+from .joint_kinematics import JointKinematics
 
 
 JOINTS = ("shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint",
@@ -83,6 +84,9 @@ class MoveItArm:
         self.commanded = False
         self.settle_started = None
         self.mode_lock = None
+        self.feedback_kinematics = None
+        self.pose_feedback_source = 'tf'
+        self.tf_feedback_age = None
 
     def _joint(self, message):
         with self.lock:
@@ -193,11 +197,12 @@ class MoveItArm:
         # Raw difference deliberately rejects a different 2*pi joint branch.
         return max(abs(actual[name] - value) for name, value in zip(names, positions))
 
-    def read_pose(self):
+    def _read_tf_pose(self):
         from rclpy.time import Time
         transform = self.buffer.lookup_transform(self.config.base_frame, self.config.tool_frame, Time())
         stamp = transform.header.stamp.sec * 1_000_000_000 + transform.header.stamp.nanosec
         age = (self.node.get_clock().now().nanoseconds - stamp) / 1e9
+        self.tf_feedback_age = age
         if stamp <= 0 or not -self.config.future_tolerance <= age <= self.config.feedback_timeout:
             raise RuntimeError("stale_robot_tf_feedback")
         p, q = transform.transform.translation, transform.transform.rotation
@@ -206,6 +211,37 @@ class MoveItArm:
             raise ValueError("invalid_robot_tf_feedback")
         check_workspace(pose, self.config)
         return pose
+
+    def read_pose(self):
+        from tf2_ros import TransformException
+        self._check_cancel()
+        try:
+            pose = self._read_tf_pose()
+            source, reason = 'tf', ''
+        except (RuntimeError, TransformException) as exc:
+            if not isinstance(exc, TransformException) and str(exc) != 'stale_robot_tf_feedback':
+                raise
+            model = getattr(self, 'feedback_kinematics', None)
+            if model is None:
+                raise  # Startup still requires fresh TF and independent model checks.
+            state = self._state()  # Includes receipt age, timestamp and finite-angle checks.
+            pose = model.pose(state.joint_state.name, state.joint_state.position)
+            check_workspace(pose, self.config)
+            source = 'joint_fk'
+            reason = f' reason={exc} tf_age_s={getattr(self, "tf_feedback_age", None)}'
+        if source != getattr(self, 'pose_feedback_source', 'tf'):
+            self.node.get_logger().info(f'pose_feedback_source={source}{reason}')
+            self.pose_feedback_source = source
+        return pose
+
+    def _verify_feedback_kinematics(self, model, state, reference):
+        self.feedback_kinematics = None
+        kinematics = JointKinematics(model, self.config.base_frame, self.config.tool_frame, JOINTS)
+        actual = kinematics.pose(state.joint_state.name, state.joint_state.position)
+        distance, angle = pose_error(actual, reference)
+        if distance > 1e-6 or angle > 1e-6:
+            raise RuntimeError('feedback_kinematics_and_moveit_disagree')
+        self.feedback_kinematics = kinematics
 
     def resolve_place_pose(self):
         """Convert the fixed recorded TCP pose into the configured tool frame.
@@ -281,6 +317,7 @@ class MoveItArm:
         self._reserve_mode()
         deadline = time.monotonic() + timeout
         self._check_cancel()
+        self.feedback_kinematics = None
         nodes = self.node.get_node_names()
         if 'logitech_f710_servo_twist' in nodes or 'servo_node' in nodes:
             raise RuntimeError("stop_joystick_and_servo_before_grasp")
@@ -325,6 +362,7 @@ class MoveItArm:
         fk = self._fk(state, deadline)
         if pose_error(actual, fk)[0] > self.config.position_tolerance or pose_error(actual, fk)[1] > self.config.orientation_tolerance:
             raise RuntimeError("moveit_model_and_tf_disagree")
+        self._verify_feedback_kinematics(model, state, fk)
         if not self.config.plan_only:
             self._controller_ready(deadline)
             mapping = self._parameters(['moveit_manage_controllers',
@@ -511,6 +549,47 @@ class MoveItArm:
             self.node.get_logger().warning(reason)
         raise CandidatePlanRejected(';'.join(failures), stage=failure_stage, reasons=failures)
 
+    def _return_home_plan(self, start, deadline):
+        """Plan to the recorded joint branch, checking the recorded TCP pose too."""
+        from moveit_msgs.msg import Constraints, JointConstraint
+        from moveit_msgs.srv import GetMotionPlan
+        home = build_return_home_pose(self.config)
+        positions = [self.config.return_home_joint_positions[j] for j in JOINTS]
+        target = self._state_at(start, JOINTS, positions)
+        self._valid(target, deadline)
+        distance, angle = pose_error(self._fk(target, deadline), home)
+        if distance > self.config.position_tolerance or angle > self.config.orientation_tolerance:
+            raise RuntimeError('return_home_joint_pose_mismatch')
+        request = GetMotionPlan.Request()
+        plan = request.motion_plan_request
+        plan.group_name = self.config.move_group
+        plan.pipeline_id, plan.planner_id = self.config.planning_pipeline, self.config.planner_id
+        plan.start_state = start
+        plan.goal_constraints = [Constraints(joint_constraints=[JointConstraint(joint_name=j,
+            position=value, tolerance_above=.0001, tolerance_below=.0001, weight=1.)
+            for j, value in zip(JOINTS, positions)])]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('return_home_planning_deadline')
+        plan.num_planning_attempts = 3
+        plan.allowed_planning_time = min(self.config.allowed_planning_time, remaining)
+        plan.max_velocity_scaling_factor = self.config.velocity_scaling
+        plan.max_acceleration_scaling_factor = self.config.acceleration_scaling
+        plan.workspace_parameters.header.frame_id = self.config.base_frame
+        for k in 'xyz':
+            setattr(plan.workspace_parameters.min_corner, k, self.config.workspace_min[k])
+            setattr(plan.workspace_parameters.max_corner, k, self.config.workspace_max[k])
+        response = self._call(GetMotionPlan, '/plan_kinematic_path', request, deadline).motion_plan_response
+        if response.error_code.val != 1:
+            raise CandidatePlanRejected('return_home_planning_failed:' + str(response.error_code.val),
+                                        stage='return_home')
+        segment = self._validate_and_time('return_home', response.trajectory, start, home, False, deadline)
+        joint = segment.trajectory.joint_trajectory
+        endpoint = self._state_at(start, joint.joint_names, joint.points[-1].positions)
+        if self._joint_error(endpoint, JOINTS, positions) > self.config.start_joint_tolerance:
+            raise CandidatePlanRejected('return_home_joint_endpoint_mismatch', stage='return_home')
+        return segment
+
     def _linear_plan(self, start, goal, deadline):
         from moveit_msgs.srv import GetCartesianPath
         target = tool_target_to_tip(goal, self.tip_to_tool, self.config.planning_link)
@@ -657,6 +736,11 @@ class MoveItArm:
             plans.extend(triplet)
             joint = triplet[-1].trajectory.joint_trajectory
             start = self._state_at(start, joint.joint_names, joint.points[-1].positions)
+        if place_ready is not None and self.config.return_home_joint_positions is not None:
+            home_segment = self._return_home_plan(start, segment_deadline())
+            plans.append(home_segment)
+            joint = home_segment.trajectory.joint_trajectory
+            start = self._state_at(start, joint.joint_names, joint.points[-1].positions)
         segment_deadline()
         if self._joint_error(self._state(stationary=True), actual_start.joint_state.name, actual_start.joint_state.position) > self.config.start_joint_tolerance:
             raise RuntimeError("robot_moved_during_planning")
@@ -671,7 +755,7 @@ class MoveItArm:
                                     trajectory=[p.trajectory for p in plans])
         self.display.publish(display)
         summary = ', '.join(f'{p.name}={seconds(p.trajectory.joint_trajectory.points[-1].time_from_start):.2f}s' for p in plans)
-        self.node.get_logger().info(('complete_place_plan: ' if len(plans) == 6 else 'complete_grasp_plan: ') + summary)
+        self.node.get_logger().info(('complete_place_plan: ' if place_ready is not None else 'complete_grasp_plan: ') + summary)
         return True
 
     def _begin(self, pose, timeout, linear):
@@ -751,6 +835,10 @@ class MoveItArm:
         if result.status != GoalStatus.STATUS_SUCCEEDED or result.result.error_code.val != 1:
             raise RuntimeError(f"trajectory_execution_failed:status={result.status},code={result.result.error_code.val}")
         distance, angle = pose_error(actual, segment.goal)
+        if segment.name == 'return_home' and self._joint_error(self._state(), JOINTS,
+                [self.config.return_home_joint_positions[j] for j in JOINTS]) > self.config.start_joint_tolerance:
+            self.settle_started = None
+            return False
         if distance > self.config.position_tolerance or angle > self.config.orientation_tolerance:
             self.settle_started = None
             return False

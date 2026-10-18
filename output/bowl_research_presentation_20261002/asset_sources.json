@@ -1,0 +1,15 @@
+{
+  "lifted_white.jpg": "debug_output/planning_diagnosis_20260923/white_lifted.jpg",
+  "left_finger.jpg": "docs/left_finger_reference_20260928.jpeg",
+  "finger_axis.png": "docs/left_finger_positive_y_rviz_20260928.png",
+  "roi_check.png": "debug_output/yolo_live_check_20260928_latest/detection_roi.png",
+  "raw_table.png": "debug_output/table_roi_update_20260928/after/rgb.png",
+  "radial_geometry.svg": "debug_output/circle_radial_replay_final_20260928/radial_grasps.svg",
+  "fallback_geometry.svg": "debug_output/circle_wall_fallback_20260928/fresh_geometry/radial_grasps.svg",
+  "fallback_detection.png": "debug_output/circle_wall_fallback_20260928/live_plan/round_0001/detection_overlay.png",
+  "grasp_pose.png": "debug_output/place_execution/20260929_142644/round_0001/grasp_pose_overlay.png",
+  "upper_left_pose.png": "debug_output/place_execution/20260929_142252/round_0001/grasp_pose_overlay.png",
+  "blue_pose.png": "debug_output/place_execution/20260929_142046/round_0001/grasp_pose_overlay.png",
+  "detection.png": "debug_output/place_execution/20260929_142644/round_0001/detection_overlay.png",
+  "contact_geometry.png": "Built-in image_gen output; exact prompt in image_prompts.json; copied from /home/rob/.codex/generated_images/01a0e60c-81d9-7010-9805-b5720e93da97/exec-e0a341ca-ed73-443c-802b-13373c3c688e.png"
+}

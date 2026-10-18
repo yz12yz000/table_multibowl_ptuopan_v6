@@ -1,0 +1,297 @@
+ROBOTICS / RESEARCH PROGRESS
+
+
+
+
+Geometry-
+Constrained
+Bowl Manipulation
+
+From visual rim grasping
+to repeatable placement
+
+
+RGB-D perception
+Radial contact geometry
+Taught placement
+                               Original hardware image | 23 Sep 2026
+02 OCT 2026
+DESIGN QUESTION
+
+
+
+
+A fixed tool pose does not fix the bowl center
+
+   ILLUSTRATIVE RENDERING
+                                                                                  Contact geometry matters
+                                                                                  Different contacts change the
+                                                                                  bowl-to-gripper offset.
+
+
+                                                                                  Teaching controls the tool
+                                                                                  A fixed release pose does not
+                                                                                  directly constrain the bowl center.
+
+
+                                                                                  Design objective
+                                                                                  Make the grasp relationship more
+                                                                                  consistent.
+
+
+   AI-generated contact illustration | Same bowl type; different rim engagement
+
+
+Principle illustration; no experimental measurements are represented.                                              02 / 12
+ CONTRIBUTION 01 / GRASP GEOMETRY
+
+
+
+
+Radial alignment with fixed finger assignment
+
+                                                                                                             Left outside; right inside
+                                                                                                             Preserve the identity of each
+                                                                                                             physical finger.
+
+
+
+                                                                                                             Radial closing direction
+                                                                                                             Tool +Y points outward; −Y points
+                                                                                                             toward the bowl center.
+
+
+
+                                                                                                             Consistent engagement
+                                                                                      RViz frame check       Keep grasp height and insertion
+                                                                                      Green axis = tool +Y   depth consistent.
+
+
+ Physical finger identification
+ Circled finger = left
+Original user reference images; the physical left finger was identified as tool +Y.                                                          03 / 12
+ CONTRIBUTION 02 / OBSERVED CONTACT SUPPORT
+
+
+
+
+Global shape guides, local geometry validates
+                                                                                  OBSERVED GEOMETRY
+
+
+
+                                                                                   Global shape
+                                                                                   Fit the observed rim to estimate center and radial direction.
+
+
+                                                                                   Local contact support
+                                                                                   Check wall patches at multiple neighborhood scales.
+
+
+                                                                                   Cross-check the grasp
+                                                                                   Compare the wall direction and observed contact with the circle.
+
+
+                                                                                   Preserve measured positions
+                                                                                   Do not project grasp contacts onto an idealized rim.
+
+
+
+
+Original point-cloud replay visualization | circle_radial_replay_final_20260928                                                                    04 / 12
+METHOD / PARTIAL OBSERVATIONS
+
+
+
+
+Use reliable local evidence when the rim is incomplete
+
+
+
+
+  LIVE PLANNING PREVIEW
+
+
+  Approximately 103° coverage; 8 grasp candidates.
+
+    Prefer validated radial geometry; use supported wall directions when arc coverage is insufficient.
+
+Separate live and offline observations from the same diagnostic session | 28 Sep 2026                    05 / 12
+PRINCIPLE / TAUGHT PLACEMENT
+
+
+
+
+Placement depends on the tool-to-center offset
+
+                                                                                       BOWL CENTER AT RELEASE
+
+
+
+
+                                                                                       c=p+Rr
+                                                                                       Bowl center = tool position + rotated object offset
+
+
+                                                                                        Teaching fixes the release pose
+                                                                                        Store full position and orientation in consistent frames.
+
+                                                                                        Radial grasping constrains the offset
+                                                                                        The aim is lower variation in the bowl-to-tool relationship.
+
+                                                                                        Residual error remains
+                                                                                        Calibration, contact depth and slip still affect placement.
+  Illustrative rendering; not a measured placement trial
+
+
+Geometric explanation under fixed bowl geometry, consistent engagement, and no slip.                                                                   06 / 12
+ CONTRIBUTION 03 / TASK FEASIBILITY
+
+
+
+
+Select a grasp that supports the complete task
+                                                                                                   SEVEN MOTION SEGMENTS
+
+
+                                                                                                   01   Approach
+                                                                                                   02   Descend to grasp
+                                                                                                   03   Lift
+                                                                                                   04   Transfer to pre-release
+                                                                                                   05   Descend to release
+                                                                                                   06   Retreat
+                                                                                                   07   Return to saved home
+
+
+                                                                                                   Try another candidate before
+                                                                                                   motion if complete planning
+                                                                                                   fails.
+
+Selected target overlay from a real task | 29 Sep 2026, 14:26:44 | The overlay is a target pose.                                  07 / 12
+SYSTEM DESIGN / FEEDBACK
+
+
+
+
+Advance execution using measured state
+                                                                                  GRIPPER STATE CONFIRMATION
+
+
+
+                                                                                  Confirm open before descent.
+                                                                                  Confirm closed and settled before lift.
+                                                                                  Confirm release before retreat.
+
+                                                                                      Recorded feedback: Close 679 → 37 | Open 24 → 680
+
+
+                                                                                   TEMPORARY TF LOSS
+
+
+                                                                                   Use fresh joint measurements with validated forward
+                                                                                   kinematics.
+                                                                                   16 integration checks passed; 12 joint configurations cross-checked.
+                                                                                   Gripper state confirmation does not verify that an object is held.
+
+Gripper feedback: real task log, 28 Sep 2026 | TF fallback: isolated simulation, 29 Sep 2026                                                              08 / 12
+EXPERIMENT / OFFLINE REPLAY
+
+
+
+
+More observations produced valid grasp candidates
+
+                                                                                                          FRAMES WITH VALID CANDIDATES
+
+
+
+
+                                                                                                          14 / 20 → 18 / 20
+                                                                                                          Partial-arc acceptance
+
+
+
+                                                                                                          23 / 27 → 27 / 27
+                                                                                                          Supported local-wall fallback
+    Observed-contact radial candidates                                    Supported local-wall fallback
+
+
+
+
+     Two different replay sets. Candidate generation is not physical grasp success.
+
+
+Historical replay evidence | circle_partial_arc_fix_20260928 and circle_wall_fallback_20260928                                            09 / 12
+IMPLEMENTED CAPABILITIES / HARDWARE RECORDS
+
+
+
+
+A complete single-bowl demonstration workflow
+
+
+
+
+BLUE TARGET                                                                     UPPER LEFT                                   LOWER RIGHT
+
+14:20:46 | command sequence completed                                           14:22:52 | command sequence completed        14:26:44 | command sequence completed
+
+
+
+
+One command, one bowl                                                           Six taught destinations                      Traceable results
+Fresh observation; release, retreat and                                         Five spatial zones plus blue; explicit XYZ   Saved masks, candidate poses, point
+fixed home return.                                                              input is also supported.                     clouds and configuration snapshots.
+
+Images from separate trials, 29 Sep 2026 | Completed command sequences; physical outcomes not automatically verified.                                           10 / 12
+NEXT EXPERIMENT / PLANNED EVALUATION
+
+
+
+
+Measure placement repeatability directly
+
+                                                                                                           PLANNED COMPARISON
+
+
+                                                                                                           Wall-normal grasping
+                                                                                                           vs. signed radial grasping
+
+                                                                                                            Vary the source position
+                                                                                                            Repeat across positions and grasp
+                                                                                                            directions.
+                                                                                                            Measure physical outcomes
+                                                                                                            Grasp success, XY placement error and
+                                                                                                            cycle time.
+                                                                                                            Separate the methods
+                                                                                                            Report radial and fallback trials
+        Target quantity: bowl-center distance to the taught target                                          independently.
+
+
+Original scene image; no measured placement-error distribution is available in the current evidence set.                                        11 / 12
+DESIGN CONTRIBUTIONS
+
+
+
+
+Make the grasp relationship
+more consistent.
+01    Consistent geometry
+      Radial alignment and fixed finger identity.
+
+
+02    Observed contact support
+      Global shape with local wall validation.
+
+
+03    Complete-task feasibility
+      Select candidates for the full motion cycle.
+
+
+
+
+NEXT MILESTONE
+
+                                                          Original hardware photograph | 23 Sep 2026
+Quantified physical success and placement repeatability
+

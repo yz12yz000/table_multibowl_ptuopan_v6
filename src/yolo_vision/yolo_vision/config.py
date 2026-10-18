@@ -31,6 +31,8 @@ class VisionConfig:
     tile_overlap: float = 0.5
     tile_mask_iou: float = 0.5
     tile_single_confidence: float = 0.35
+    # Optional shared clear-table configuration. Legacy observations stay unchanged.
+    tray_config_path: str | None = None
 
     def __post_init__(self):
         if type(self.inference_tile_size) is not int or self.inference_tile_size < 0 or 0 < self.inference_tile_size < 64:
@@ -47,6 +49,9 @@ class VisionConfig:
         if self.depth_image_topic is not None and (not isinstance(self.depth_image_topic, str)
                                                    or not self.depth_image_topic.strip()):
             raise ValueError("invalid_config:depth_image_topic")
+        if self.tray_config_path is not None and (not isinstance(self.tray_config_path, str)
+                                                 or not self.tray_config_path.strip()):
+            raise ValueError("invalid_config:tray_config_path")
         if self.device != "intel:cpu":
             raise ValueError("first_version_requires_intel:cpu")
         for name in ("confidence", "sync_slop", "input_timeout", "max_source_age"):

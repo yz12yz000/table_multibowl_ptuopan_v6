@@ -21,7 +21,7 @@
   "tf_timeout": 5.0,
   "input_timeout": 60.0,
   "publish_debug": true,
-  "orientation_mode": "wall_normal",
+  "orientation_mode": "circle_radial",
   "wall_radius": 0.025,
   "wall_depth": 0.03,
   "max_wall_tilt_deg": 40.0,
@@ -36,5 +36,15 @@
   "candidates_topic": "/rim_locator/grasp_candidates",
   "tool_frame": "grasp_center",
   "max_grasp_candidates": 8,
-  "candidate_min_separation": 0.004
+  "candidate_min_separation": 0.004,
+  "outside_finger_axis": "positive_y",
+  "circle_min_radius": 0.04,
+  "circle_max_radius": 0.15,
+  "circle_inlier_distance": 0.004,
+  "circle_min_inlier_ratio": 0.4,
+  "circle_max_residual": 0.0025,
+  "circle_min_coverage_deg": 120.0,
+  "circle_allow_wall_fallback": true,
+  "circle_max_contact_error": 0.002,
+  "circle_max_normal_deviation_deg": 20.0
 }

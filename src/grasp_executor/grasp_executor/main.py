@@ -94,7 +94,7 @@ class GraspNode(Node):
         if status == "success":
             details["grasp_verified"] = False
             details["placement_verified"] = False
-            details["gripper_feedback"] = "command_exit_and_settle_only"
+            details["gripper_feedback"] = "target_state_confirmed"
         payload = json.dumps({"status": status, **details}, ensure_ascii=False)
         self.status_pub.publish(String(data=payload))
         # rclpy/rcutils requires a logger name to keep one severity level;

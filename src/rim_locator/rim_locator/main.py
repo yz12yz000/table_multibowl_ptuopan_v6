@@ -83,7 +83,10 @@ class RimNode(Node):
             if len(object_ids) != len(points):
                 raise ValueError("object_id_length_mismatch")
             if cloud.header.frame_id == self.config.target_frame:
-                self.finish(points, object_ids, cloud.header.stamp)
+                self.finish(points, object_ids, cloud.header.stamp, cloud_transform={
+                    'source_frame': cloud.header.frame_id, 'target_frame': self.config.target_frame,
+                    'translation': [0., 0., 0.], 'rotation': [0., 0., 0., 1.],
+                    'source_stamp_ns': cloud.header.stamp.sec * 10**9 + cloud.header.stamp.nanosec})
                 return
             # TF interprets a zero stamp as "latest", which is not the requested policy.
             if cloud.header.stamp.sec == 0 and cloud.header.stamp.nanosec == 0:
@@ -118,11 +121,14 @@ class RimNode(Node):
         try:
             t, q = transform.translation, transform.rotation
             points = transform_points(points, [t.x, t.y, t.z], [q.x, q.y, q.z, q.w])
-            self.finish(points, object_ids, header.stamp)
+            self.finish(points, object_ids, header.stamp, cloud_transform={
+                'source_frame': header.frame_id, 'target_frame': self.config.target_frame,
+                'translation': [t.x, t.y, t.z], 'rotation': [q.x, q.y, q.z, q.w],
+                'source_stamp_ns': header.stamp.sec * 10**9 + header.stamp.nanosec})
         except Exception as exc:
             self.report("failed", failed_step="processing", reason=str(exc))
 
-    def finish(self, points, object_ids, stamp):
+    def finish(self, points, object_ids, stamp, cloud_transform=None):
         object_ids = object_ids.reshape(-1)
         if len(points) != len(object_ids):
             raise ValueError("object_id_length_mismatch")
@@ -209,6 +215,7 @@ class RimNode(Node):
                    for distance, object_id, result, candidates in results]
         self.publisher.publish(message)
         self.report("success", source_stamp_ns=stamp_ns, object_count=len(results), objects=objects, rejected=rejected,
+                    cloud_transform=cloud_transform,
                     ordered_object_ids=[x[1] for x in results])
 
 

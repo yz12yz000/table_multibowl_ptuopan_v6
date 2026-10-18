@@ -1,0 +1,14 @@
+{
+  "slide_count": 8,
+  "pdf_page_count": 8,
+  "notes_parts": 8,
+  "rendered_pages": 8,
+  "pdf_text_out_of_bounds": [],
+  "shape_out_of_bounds": [],
+  "language": "English slides; Chinese notes",
+  "tray_localization": "YOLO mask + synchronized RGB-D; custom weights still required",
+  "visual_review": "Updated slides 2, 7 and 8 rendered and visually inspected; all-page text and bounds checked.",
+  "software_evidence": "debug_output/clear_table_validation/yolo_20261010/summary.json",
+  "test_total": 888,
+  "hardware_validated": false
+}

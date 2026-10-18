@@ -77,6 +77,16 @@ def build_place_drop_pose(ready_pose, config):
     return pose
 
 
+def build_return_home_pose(config):
+    if config.return_home_joint_positions is None:
+        return None
+    q = vector(config.return_home_orientation, 'xyzw', 'return_home_orientation')
+    pose = Pose(vector(config.return_home_position, 'xyz', 'return_home_position'),
+                tuple(v / math.hypot(*q) for v in q), config.base_frame, config.tool_frame)
+    check_workspace(pose, config)
+    return pose
+
+
 def validate_pose(pose, config):
     if not isinstance(pose, Pose) or pose.frame_id != config.base_frame or pose.tool_frame != config.tool_frame:
         raise ValueError("pose_frame_mismatch")
@@ -287,7 +297,7 @@ def execute_grasp(approach_pose, grasp_pose, interfaces, config, on_state=None, 
 
 def execute_grasp_place(approach_pose, grasp_pose, place_ready, place_drop, interfaces, config,
                         on_state=None, cancel=None):
-    """Execute one six-segment grasp/place sequence using prepared MoveIt plans."""
+    """Execute prepared grasp/place paths, then optionally return to taught home."""
     cancel = cancel if cancel is not None else Event()
     on_state = on_state if on_state is not None else lambda state: None
     step = "validating"
@@ -320,6 +330,7 @@ def execute_grasp_place(approach_pose, grasp_pose, place_ready, place_drop, inte
             raise RuntimeError("gripper_command_failed")
 
     try:
+        home = build_return_home_pose(config)
         for pose in (approach_pose, grasp_pose, place_ready, place_drop):
             validate_pose(pose, config)
         if (approach_pose.position[:2] != grasp_pose.position[:2]
@@ -345,6 +356,8 @@ def execute_grasp_place(approach_pose, grasp_pose, place_ready, place_drop, inte
         step = "releasing_gripper"; on_state(step); gripper(interfaces.open_gripper)
         if config.place_retreat:
             step = "retreating_from_place"; on_state(step); motion(interfaces.move_linear, place_ready)
+        if home is not None:
+            step = "returning_home"; on_state(step); motion(interfaces.move_to_pose, home)
         if callable(getattr(interfaces, "finish", None)):
             interfaces.finish()
         return ExecutionResult("success")

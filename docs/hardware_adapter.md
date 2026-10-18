@@ -1,111 +1,43 @@
-# MoveIt 抓取后端
+# 当前 MoveIt 与硬件接口
 
-当前入口已从 FZI 位置 Topic 改为现有 MoveIt + UR 轨迹控制器，不需要安装 Pilz。
-本机已具备 `moveit_msgs`、OMPL、KDL、UR 控制器和 MoveIt 控制器映射。
-本次没有修改外部工作区的 URDF、SRDF、控制器 YAML 或 MoveIt 安装包。
-旧 `cartesian_ros.py` 和 `docs/switch_arm_control_mode.sh` 保留作历史参考，当前启动流程不使用它们。
+主流程使用 MoveIt 和 UR 轨迹控制器。启动步骤见 [当前启动说明](startup.md)，参数及日志见 [完整抓放说明](../New_run/README.md)。
 
-操作步骤见 [startup_scripts.md](0921/startup_scripts.md)，此处说明实现和验证边界。
+## 数据与动作
 
-## 接口与动作
+完整 place 输入为 `/rim_locator/grasp_candidates` 上的 `std_msgs/String` 版本化 JSON，包含观测身份、采集时间及每个物体的候选列表。单碗运行器校验唯一目标，按原顺序尝试候选；只有完整路径预检通过才执行。
 
-- 旧三段抓取输入为 `/rim_locator/rim_point`（`PointStamped`）；完整 place 流程输入为
-  `/rim_locator/grasp_poses`（`PoseArray`）。两者均使用 `base_link` 坐标系。
-- 抓取坐标是 `grasp_center`，规划组 `ur_manipulator` 的末端是 `tool0`。
-- 读取当前关节状态和真实 TF，以当前关节状态为种子调用 `/compute_ik`，选定接近点关节解。
-- `/plan_kinematic_path` 用现有 OMPL 规划到接近点；`/compute_cartesian_path` 规划竖直下降、抬升。
-- 三段必须先全部规划通过。Cartesian 完成率必须为 100%，开启 `avoid_collisions`，拒绝关节跳变。
-- 对轨迹的关节限位、时间、导数、采样状态碰撞、工具 FK、直线偏差和最终到位误差进行验证。
-- 在 `/display_planned_path` 发布三段完整预览；`planned` 表示规划成功，不代表执行过。
-- 执行模式通过 `/execute_trajectory` 交给 MoveIt，再由其现有映射发送到
-  `/scaled_joint_trajectory_controller/follow_joint_trajectory`。
-- 顺序：接近 → 打开夹爪 → 竖直下降 → 关闭夹爪 → 竖直抬升到接近点。
+七段轨迹为：接近、抓取下降、抓后抬升、移到放置准备点、放置下降、释放后上退、返回固定起点。夹爪在对应阶段确认开合状态。预览只规划，真实入口重新采集、规划和检查。
 
-工具转换使用完整刚体变换（包含平移和旋转）：
+MoveIt 使用 `/compute_ik`、`/plan_kinematic_path`、`/compute_cartesian_path` 等接口；轨迹通过 `/execute_trajectory` 交给现有控制器映射，最终使用 `scaled_joint_trajectory_controller`。工具坐标为 `grasp_center`，规划组为 `ur_manipulator`，规划末端为 `tool0`。
 
-```text
-T_base_tool0 = T_base_grasp_center × inverse(T_tool0_grasp_center)
-```
+工具换算为 `T_base_tool0 = T_base_grasp_center × inverse(T_tool0_grasp_center)`。`grasp_offset` 沿基座轴作用于目标夹持中心，不重复补偿工具长度。放置点使用保存的参考变换，并由现场 TF 核对。
 
-启动时检查工具链是固定关节链，并核对 MoveIt FK 与实时 TF。
-`grasp_offset` 是视觉点到期望夹持中心的修正，不能重复填写工具长度补偿。
-其三个分量单位为米，沿 `base_frame` 的 X/Y/Z 轴相加，默认仍为零。
-PoseArray 中的位置是未补偿的定位锚点；批次入口统一加一次偏移，保持输入姿态，
-以补偿后抓取点生成沿基座 Z 的接近位姿、预览和规划，并检查工作空间。
-固定放置 ready/drop 不受抓取偏移影响；旧 PointStamped 路径也仅加一次。
-批次按补偿后 XY 距离排序，但执行认领摘要继续使用按原始距离排序的原始观测，
-修改偏移不会让同一已认领批次重新执行。冻结批次和现有时间戳检查时机保持不变。
+旧 PointStamped/PoseArray 输入和三段抓取入口仍保留兼容用途。旧 FZI 通信模块及模式切换脚本已移至 [历史程序目录](archive/README.md)，当前主流程不调用。
 
-## 参数
+## 当前配置
 
-配置在 `src/grasp_executor/config/config.json`。可用
-`./run_grasp_executor.sh config_path:=/绝对路径/现场配置.json` 指定现场参数。
-脚本/launch 的模式开关优先于 JSON 的 `plan_only`；真实执行显式加 `--execute`。
+完整流程基线在 `src/grasp_executor/config/place_config.json`。目标准备点、各点下降距离和返回起点由 `place_zones.json` 覆盖；运行目录中的 `effective_grasp_config.json` 是本轮实际使用值。通用抓取配置 `config.json` 有独立参数，不能混用其数值。
 
-| 参数 | 默认/含义 |
-|---|---|
-| `max_target_age`、`input_timeout` | 600 秒；目标年龄与等待目标超时分别检查 |
-| `fixed_orientation`、`grasp_offset` | 沿用原配置，须按现场夹爪姿态/夹持点核实 |
-| `approach_height` | 0.15 m |
-| `planning_link`、`tool_frame` | `tool0`、`grasp_center` |
-| `workspace_min/max` | 限制工具 XYZ；现在也实际检查 Z 下限，默认 -0.10 m |
-| `velocity_scaling`、`acceleration_scaling` | OMPL 请求均为 0.1 |
-| `approach_speed`、`descend_speed` | TCP 采样限速 0.03、0.01 m/s；抬升也用 descend_speed |
-| `angular_speed` | TCP 采样角速度限值 0.15 rad/s |
-| `max_joint_velocity/acceleration` | 额外限值 0.3 rad/s、0.3 rad/s² |
-| `cartesian_step`、`max_joint_step` | 5 mm 插值步长，0.25 rad 相邻轨迹点跳变阈值 |
-| `planning_timeout`、`motion_timeout` | 每段规划及检查 60 秒；每段执行 90 秒 |
-| `position_tolerance`、`orientation_tolerance` | 到位 2 mm、0.02 rad；静止保持 0.25 秒 |
-| 环境模型 | 不加载桌面或额外夹爪保护盒；启动及规划前清理旧对象 |
-| `require_collision_world_for_execution` | false；无世界障碍模型也允许通过此项检查 |
-| `gripper_settle_time` | Open/Close 命令退出后等待 1 秒 |
+| 参数 | 当前 place 基线 |
+| --- | --- |
+| 抓取接近高度 | 0.10 m |
+| 搬运线速度上限 | 0.15 m/s |
+| 下降、抬升线速度上限 | 0.05 m/s |
+| 工具角速度上限 | 0.45 rad/s |
+| MoveIt 速度 / 加速度比例 | 0.30 / 0.10 |
+| 关节速度 / 加速度上限 | 0.90 rad/s / 0.30 rad/s² |
+| 夹爪操作超时 / 闭合稳定时间 | 18 s / 3 s |
+| 放置下降距离 | 六个示教目标均为 0.122 m |
+| 固定起点 | `place_zones.json` 的 `return_home` |
 
-本机 MoveIt 的 Cartesian 服务返回带时间轨迹，但不接收 OMPL 的速度缩放参数。
-适配器检查控制器使用的五次插值采样，统一延长整段时间并同步缩放速度/加速度，
-保持轨迹几何形状；过长而无法在 motion_timeout 内执行的轨迹直接拒绝。
-这些是基于模型的离散检查，不构成连续路径或真机跟踪误差的数学保证。
+基线 JSON 内旧固定放置的 0.20 m 是兼容多碗路径的值，现行目标模式会覆盖为目标配置；不能据此判断单碗实际下降距离。实际速度还受轨迹、加减速和机器人限速约束。
 
-保留但当前 MoveIt 后端不使用的旧 FZI 参数为 `controller_namespace`、
-`controller_tip_frame`、`command_rate`、`max_tracking_error`。
+## 反馈与停止
 
-## 失败与停止
+控制器、External Control、关节新鲜度、持续静止、轨迹、限位和已有碰撞检查继续生效。程序不建立桌面模型或额外夹爪保护盒。
 
-规划失败、目标过期、工具链错误、工作空间越界、碰撞、Cartesian 不完整均不发送运动目标。
-每段执行前检查控制器、External Control、当前位置，并对缓存路径重新检查当前场景。
-Action 成功、实际 TF 到位及新鲜静止反馈同时满足，才继续夹爪/下一段动作。
+正常位姿反馈使用新鲜 TF。TF 暂时失效时，仅在启动时通过模型一致性核验后，才允许用新鲜测量关节和当前 URDF 的本地 FK 反馈；细节见 [TF 反馈恢复](TF反馈恢复_20260929.md)。
 
-执行前将目标原时间戳和坐标写入 `execution_journal`，失败也保留记录，防止节点重启后重复执行。
-重试应重新识别定位。纯预览不写执行记录。
-Ctrl+C、执行错误和超时会取消 Action；未确认取消时尝试停用本任务轨迹控制器。
-停止还需观察新的持续静止反馈；仅停用控制器但未确认 Action 结束时会报告 `stop_error`。
-模式锁仅约束本项目入口，无法阻止其他外部程序直接发控制命令。
+夹爪反馈通过驱动 `/rosout` 中的原始串口包读取，校验 CRC、设备和寄存器信息；打开或闭合未确认则停止。当前张开位置校准为 680±10 原始计数，不确认物体夹持或落座。
 
-## 目前未验证的现场事项
-
-2026-09-23 起移除桌面模型与额外夹爪保护盒加载。不再依赖点云建模文件或其时间戳。
-准备脚本和抓取规划会清理旧对象并回读确认；机器人 URDF/SRDF 自碰撞检查保持开启，未建模的桌面不会参与碰撞检测。
-
-相机外参、`grasp_center` 的物理 TCP、固定抓取姿态和夹持偏移仍需现场核实。
-假定对象、相机和底盘相对位置不变；延长到 10 分钟不会重新测量目标。
-夹爪驱动暂无可用的到位/夹持成功 Topic，本次只检查命令退出并等待，成功状态仍标明
-`grasp_verified=false`；不会声称已经抓住物体。抬升规划未将被抓物体附着到场景。
-真实 UR 运动、速度缩放、保护停止和实际夹持效果需要现场验收。
-
-## 可复现测试
-
-加载 `startup_scripts.md` 中的 ROS 环境后：
-
-```bash
-colcon build --symlink-install --packages-select grasp_executor
-source install/setup.bash
-/usr/bin/python3 -m pytest -q src/grasp_executor/test
-ROBOT_STARTUP_ROS_TEST=1 /usr/bin/python3 -B tools/test_robot_control.py
-/usr/bin/python3 -B tools/test_moveit_grasp.py
-```
-
-最后两项选择随机空闲的 localhost DDS domain；若发现已被使用会退出，可重新运行。
-`test_moveit_grasp.py` 启动本机真实 MoveIt、项目 UR5e/夹爪模型与合成关节反馈，
-验证三段规划、工具变换、不可达目标拒绝、模拟障碍碰撞拒绝，以及真实 MoveIt Action
-到模拟 FollowJointTrajectory 控制器的三段执行/夹爪命令顺序。
-不会启动 UR 驱动、ros2_control 硬件接口或真实夹爪命令。
-测试日志保存在打印的 `/tmp/moveit-grasp-test-*` 目录。
+`grasp_verified=false`、`placement_verified=false` 表示仍无物体结果传感确认。历史测试通过数和实机记录见 [归档索引](archive/README.md)，不能作为当前全部目标的实机验收证明。

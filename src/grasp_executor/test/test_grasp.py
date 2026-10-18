@@ -203,7 +203,7 @@ def test_action_rejection():
 def test_action_failure_not_arrival(status, code):
     a = bare_arm()
     goal = build_grasp_pose((.4, .1, .2), a.config)
-    a.active, a.read_pose = NS(linear=False, goal=goal), lambda: goal
+    a.active, a.read_pose = NS(name='approach', linear=False, goal=goal), lambda: goal
     a.result_future = completed(NS(status=status, result=NS(error_code=NS(val=code))))
     with pytest.raises(RuntimeError, match='trajectory_execution_failed'):
         a.is_pose_reached(.1)
@@ -212,12 +212,30 @@ def test_action_failure_not_arrival(status, code):
 def test_arrival_requires_action_success_and_settling():
     a = bare_arm()
     goal = build_grasp_pose((.4, .1, .2), a.config)
-    a.active, a.read_pose = NS(linear=False, goal=goal), lambda: goal
+    a.active, a.read_pose = NS(name='approach', linear=False, goal=goal), lambda: goal
     assert a.is_pose_reached(.1) is False
     a.result_future = completed(NS(status=4, result=NS(error_code=NS(val=1))))
     assert a.is_pose_reached(.1) is False
     a.settle_started = time.monotonic() - a.config.settle_time - .1
     assert a.is_pose_reached(.1) is True
+
+
+def test_return_home_same_tcp_but_different_joint_turn_is_not_arrival():
+    from dataclasses import replace
+    from grasp_executor.grasp import build_return_home_pose
+    a = bare_arm()
+    a.config = replace(a.config, return_home_joint_positions=dict.fromkeys(JOINTS,0.),
+        return_home_position=dict(x=.4,y=.2,z=.4),
+        return_home_orientation=dict(x=0.,y=1.,z=0.,w=0.))
+    pose = build_return_home_pose(a.config)
+    a.active = NS(name='return_home',linear=False,goal=pose)
+    a.read_pose = lambda:pose
+    state = RobotState()
+    state.joint_state.name = list(JOINTS)
+    state.joint_state.position = [math.tau,0.,0.,0.,0.,0.]
+    a._state = lambda **kw:state
+    a.result_future = completed(NS(status=4,result=NS(error_code=NS(val=1))))
+    assert a.is_pose_reached(.1) is False
 
 
 def test_service_wait_timeout_and_cancel():

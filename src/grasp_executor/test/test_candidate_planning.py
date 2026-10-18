@@ -79,6 +79,34 @@ def test_place_rejection_discards_old_plan_without_preview_advance():
     assert a.preview_state.joint_state.position == pytest.approx([1.3]*6)
 
 
+@pytest.mark.parametrize('reject', [False, True])
+def test_return_home_is_planned_before_any_commit(reject):
+    from grasp_executor.moveit_ros import JOINTS
+    from grasp_executor.grasp import build_return_home_pose
+    a = adapter()
+    a.config = replace(a.config, return_home_joint_positions=dict.fromkeys(JOINTS, 0.),
+        return_home_position=dict(x=.4,y=.2,z=.4),
+        return_home_orientation=dict(x=0.,y=1.,z=0.,w=0.))
+    calls = []
+    def home_plan(start, deadline):
+        calls.append(list(start.joint_state.position))
+        if reject:
+            raise CandidatePlanRejected('home_unreachable', stage='return_home')
+        path = trajectory()
+        path.joint_trajectory.points[-1].positions = [0.]*6
+        return Segment('return_home', path, start, build_return_home_pose(a.config), False, [])
+    a._return_home_plan = home_plan
+    if reject:
+        with pytest.raises(CandidatePlanRejected, match='home_unreachable'):
+            prepare(a)
+        assert not a.plans and not a.displayed and a.preview_state is None
+    else:
+        assert prepare(a)
+        assert len(a.plans) == 7 and a.plans[-1].name == 'return_home'
+        assert a.preview_state.joint_state.position == pytest.approx([0.]*6)
+    assert calls[0] == pytest.approx([.6]*6)
+
+
 def test_execution_always_reads_measured_state_between_objects():
     a = adapter()
     a.config = replace(a.config, plan_only=False)
@@ -88,6 +116,35 @@ def test_execution_always_reads_measured_state_between_objects():
     a.measured = state([.4]*6)
     prepare(a)
     assert a.starts[2] == [.4]*6
+
+
+@pytest.mark.parametrize('wrong_pose', [False, True])
+def test_return_plan_preserves_recorded_joint_turns_and_checks_fk(wrong_pose):
+    from grasp_executor.moveit_ros import JOINTS
+    from grasp_executor.grasp import build_return_home_pose
+    a = adapter()
+    joints = [5.4, -1.7, -1.8, -1.1, 1.5, 3.8]
+    a.config = replace(a.config, return_home_joint_positions=dict(zip(JOINTS,joints)),
+        return_home_position=dict(x=.4,y=.2,z=.4),
+        return_home_orientation=dict(x=0.,y=1.,z=0.,w=0.))
+    home = build_return_home_pose(a.config)
+    a._fk = lambda *args: replace(home, position=(.5,.2,.4)) if wrong_pose else home
+    requests = []
+    def call(typ,name,request,deadline):
+        requests.append(request)
+        path = trajectory()
+        path.joint_trajectory.points[-1].positions = joints
+        return NS(motion_plan_response=NS(error_code=NS(val=1),trajectory=path))
+    a._call = call
+    if wrong_pose:
+        with pytest.raises(RuntimeError, match='return_home_joint_pose_mismatch'):
+            a._return_home_plan(state([0.]*6), time.monotonic()+1)
+        assert not requests
+    else:
+        segment = a._return_home_plan(state([0.]*6), time.monotonic()+1)
+        assert segment.name == 'return_home'
+        constraints = requests[0].motion_plan_request.goal_constraints[0].joint_constraints
+        assert [item.position for item in constraints] == joints
 
 
 def test_shared_deadline_and_expired_budget_do_not_commit():

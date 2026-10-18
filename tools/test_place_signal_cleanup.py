@@ -30,6 +30,15 @@ def run():
     from test_live_place_pipeline import process_group_alive, stop_owned_processes
     root = Path(__file__).resolve().parents[1]
     output = Path(tempfile.mkdtemp(prefix='place-signal-cleanup-'))
+    zones = json.loads((root / 'src/grasp_executor/config/place_zones.json').read_text())
+    grasp = json.loads((root / 'src/grasp_executor/config/place_config.json').read_text())
+    zones['zones']['左上'].update(enabled=True,
+        place_reference_position=grasp['place_reference_position'],
+        place_reference_orientation=grasp['place_reference_orientation'],
+        place_ready_position=grasp['place_ready_position'],
+        place_ready_orientation=grasp['place_ready_orientation'])
+    zone_path = output / 'zones.json'
+    zone_path.write_text(json.dumps(zones))
     result = dict(passed=False, domain=domain, hardware_started=False, targets_published=0, checks=[])
     print('Test logs:', output, 'ROS_DOMAIN_ID:', domain, flush=True)
     rclpy.init(domain_id=domain)
@@ -46,7 +55,8 @@ def run():
             log = output / (sig.name + '.log')
             stream = log.open('x')
             process = subprocess.Popen([str(root / 'run_pipeline_place_test.sh'), '--output-dir',
-                str(task_output), '--timeout', '45'], cwd=root, stdin=subprocess.DEVNULL,
+                str(task_output), '--timeout', '45', '--target-zone', '左上',
+                '--place-zones-config', str(zone_path)], cwd=root, stdin=subprocess.DEVNULL,
                 stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
             deadline = time.monotonic() + 30.
             while 'yolo_vision {"status": "ready"' not in log.read_text():

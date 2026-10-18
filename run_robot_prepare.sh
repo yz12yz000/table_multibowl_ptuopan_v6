@@ -9,7 +9,7 @@ if [[ "${1:-}" = --help ]]; then
 可配置：ROBOT_IP、GRIPPER_PORT、GRIPPER_BAUDRATE、START_GRIPPER、
 START_ORBBEC、START_LIVOX、LAUNCH_RVIZ、BASE_OFFSET_X/Y/Z/YAW。
 移动底盘驱动仍由外部提供 odom -> base_footprint；本脚本不启动人工遥控。
-Ctrl+C 停止本脚本启动的硬件进程。详细说明：docs/0921/startup_scripts.md
+Ctrl+C 停止本脚本启动的硬件进程。详细说明：docs/startup.md
 EOF
     exit 0
 fi

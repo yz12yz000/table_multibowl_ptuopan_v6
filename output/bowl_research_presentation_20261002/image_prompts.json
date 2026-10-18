@@ -1,0 +1,9 @@
+{
+  "mode": "built-in image_gen",
+  "assets": [
+    {
+      "name": "contact_geometry",
+      "prompt": "Use case: scientific-educational. Asset type: photorealistic mechanical contact illustration for a doctoral research presentation. Create a clean wide 16:9 two-panel studio 3D product rendering, realistic physics and contact, pale warm gray background. Each panel shows an identical black two-finger parallel robotic gripper viewed obliquely from the side and above, gripping the near rim of an upright white ceramic circular bowl. One slim rounded fingertip is INSIDE the bowl and one is OUTSIDE, contacting opposite faces of the same near wall just below the lip. The bowl opening stays fully visible; no fingers intersect ceramic, no extra fingers, no suction, no flat objects. Both gripper bodies have exactly the same image position, orientation, opening direction and scale within their respective equal-size panels, but the bowl has a modest different relative offset and contact insertion in panel B, illustrating that the same tool pose can coexist with different object offsets. The grippers hang from short industrial wrist flanges entering from the top edge. There is generous space around the contact. The bowls remain level. Left panel: deeper engagement on the tapered wall; right panel: shallower engagement near the lip, so the center is slightly horizontally displaced. Soft contact shadows, realistic matte metal, ceramic thickness visible, restrained academic product photography. No text, numbers, arrows, charts, blocks, flowcharts or scientific measurements. This is a constructed illustration of contact geometry, not a photograph of an experiment."
+    }
+  ]
+}

@@ -285,7 +285,10 @@ class RosProbe:
             raise RuntimeError("机器人尚未处于 RUNNING / NORMAL 或 REDUCED 状态")
         now = time.monotonic()
         if self.still_since is None or now - self.still_since < 0.3 or now - self.joint_receipt > 0.5:
-            raise RuntimeError(self.joint_error or "尚无持续静止、实时的六关节反馈")
+            duration = 0. if self.still_since is None else now - self.still_since
+            raise RuntimeError(self.joint_error or (
+                f"尚无持续静止、实时的六关节反馈：连续静止 {duration:.3f}s（需 0.300s），"
+                f"距上次反馈 {now-self.joint_receipt:.3f}s（最多 0.500s）"))
         for target in ("tool0", "grasp_center"):
             transform = self.buffer.lookup_transform("base_link", target, Time())
             stamp = transform.header.stamp.sec * 1_000_000_000 + transform.header.stamp.nanosec
@@ -304,18 +307,12 @@ class RosProbe:
             if topic.endswith("/_action/status") and any(s.status in BUSY_GOAL_STATES for s in message.status_list):
                 raise RuntimeError(f"仍有未完成运动/任务 Action：{topic}")
 
-    def preflight(self, target, joystick=False):
-        self.spin_for(1.0)
-        duplicates = [name for name, count in Counter(self.node_names()).items()
-                      if count > 1 and name in ("/controller_manager", "/move_group", "/robot_state_publisher")]
-        if duplicates:
-            raise RuntimeError("发现重复关键节点：" + ", ".join(duplicates))
-        self.idle()
-        if joystick:
-            self.absent({"servo_node"})
-        switch_plan(self.controllers(), target)
-        self.planning_ready()
-        self.observe_robot()
+    def wait_robot_ready(self):
+        """Allow fresh feedback to settle again after service/discovery delays.
+
+        Keep all robot_ready thresholds. A single transient sample may restart
+        the stationary window; bounded waiting is required at every phase.
+        """
         last_reason = ["等待机器人状态"]
 
         def ready():
@@ -330,10 +327,24 @@ class RosProbe:
             self.wait(ready, "External Control、关节状态和 TF")
         except RuntimeError as exc:
             raise RuntimeError(last_reason[0]) from exc
+
+    def preflight(self, target, joystick=False):
+        self.spin_for(1.0)
+        duplicates = [name for name, count in Counter(self.node_names()).items()
+                      if count > 1 and name in ("/controller_manager", "/move_group", "/robot_state_publisher")]
+        if duplicates:
+            raise RuntimeError("发现重复关键节点：" + ", ".join(duplicates))
+        self.idle()
+        if joystick:
+            self.absent({"servo_node"})
+        switch_plan(self.controllers(), target)
+        self.planning_ready()
+        self.observe_robot()
+        self.wait_robot_ready()
         # Allow reliable retained action-status discovery before deciding idle.
         self.spin_for(0.5)
+        self.wait_robot_ready()
         self.idle()
-        self.robot_ready()
         if target == "scaled_joint_trajectory_controller":
             from control_msgs.action import FollowJointTrajectory
             self.action_ready(FollowJointTrajectory, "/scaled_joint_trajectory_controller/follow_joint_trajectory")
@@ -341,7 +352,7 @@ class RosProbe:
                 raise RuntimeError("轨迹命令 Topic 存在发布者，请先停止外部轨迹发送程序")
         elif self.node.get_publishers_info_by_topic("/forward_position_controller/commands"):
             raise RuntimeError("forward_position_controller 已有命令发布者，请先停止它")
-        print("预检通过：驱动、External Control、静止关节、TF、MoveIt 及任务互斥。")
+        print("预检通过：驱动、External Control、静止关节、TF、MoveIt 及任务互斥。", flush=True)
 
     def trigger(self, name):
         from std_srvs.srv import Trigger
@@ -354,7 +365,7 @@ class RosProbe:
         from controller_manager_msgs.srv import SwitchController
 
         if not activate and not deactivate:
-            print("控制器已经处于目标状态，无需重复切换。")
+            print("控制器已经处于目标状态，无需重复切换。", flush=True)
             return
         request = SwitchController.Request()
         request.activate_controllers = activate
@@ -362,7 +373,7 @@ class RosProbe:
         request.strictness = SwitchController.Request.STRICT
         request.activate_asap = False
         request.timeout.sec = max(1, min(10, int(self.timeout) - 1))
-        print(f"切换控制器：activate={activate}, deactivate={deactivate}")
+        print(f"切换控制器：activate={activate}, deactivate={deactivate}", flush=True)
         response = self.call(SwitchController, "/controller_manager/switch_controller", request)
         if not response.ok:
             raise RuntimeError("控制器切换被拒绝；未发送运动目标，请检查控制器/硬件日志")
@@ -372,17 +383,20 @@ class RosProbe:
             self.trigger("/servo_node/stop_servo")
         self.spin_for(0.1)
         self.idle()
-        self.robot_ready()
         plan = switch_plan(self.controllers(), target)
+        # Listing controllers / stopping Servo can reset or delay joint
+        # feedback. Wait for a complete stationary window just before switching.
+        self.wait_robot_ready()
+        self.idle()
         if ownership_marker is not None:
             Path(ownership_marker).write_text("forward_position_controller\n")
         self.switch(*plan)
         controllers = self.controllers()
         if active_motion(controllers) != [target]:
             raise RuntimeError("切换后运动控制器状态不符合预期：" + str(active_motion(controllers)))
-        self.spin_for(0.1)
-        self.robot_ready()
-        print(f"已确认：{target} active，其余机械臂运动控制器 inactive。")
+        self.wait_robot_ready()
+        self.idle()
+        print(f"已确认：{target} active，其余机械臂运动控制器 inactive。", flush=True)
 
     def servo_config(self, output):
         import yaml

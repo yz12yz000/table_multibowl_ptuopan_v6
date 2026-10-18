@@ -1,0 +1,12 @@
+{
+  "historical_images": {
+    "raw_table.png": "output/bowl_research_presentation_20261002/assets/raw_table.png",
+    "detection.png": "output/bowl_research_presentation_20261002/assets/detection.png",
+    "grasp_pose.png": "output/bowl_research_presentation_20261002/assets/grasp_pose.png"
+  },
+  "diagrams": "Editable native PowerPoint shapes; explanatory, not measured experimental images.",
+  "tray_diagram": "Editable YOLO mask, outer contour, usable interior and local axes; explanatory, not model output.",
+  "sequence_charts": "Plotted from yolo_20261010/offline_demo/round_0001..0005/synthetic_observation.json",
+  "validation_source": "debug_output/clear_table_validation/yolo_20261010/summary.json",
+  "generative_images_used": false
+}

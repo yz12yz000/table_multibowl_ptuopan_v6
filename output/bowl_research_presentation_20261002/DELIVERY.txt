@@ -1,0 +1,11 @@
+Geometry-Constrained Bowl Manipulation
+
+Main presentation: Bowl_Manipulation_Research_Report_EN_CN.pptx
+Preview: Bowl_Manipulation_Research_Report_EN_CN.pdf
+Chinese notes are embedded in the PowerPoint Notes pane; a separate UTF-8 text copy is also supplied.
+
+12 slides, English on-slide text, Chinese speaker notes.
+Evidence: project documents, code and saved records from 23-29 September 2026. No new robot commands or hardware trials were run while preparing this presentation.
+Original experimental images and AI-generated illustrations are explicitly distinguished. One built-in image_gen asset is reused on slides 2 and 6; its exact prompt is in image_prompts.json.
+
+To rebuild the editable PPTX: python3 build_presentation.py (requires python-pptx and Pillow). Converted PNGs of original SVG result figures are supplied.

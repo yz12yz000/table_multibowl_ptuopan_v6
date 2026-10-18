@@ -3,7 +3,7 @@
   "pointcloud_topic": "/camera/depth/points",
   "output_topic": "/yolo_vision/object_cloud",
   "target_class": "bowl",
-  "confidence": 0.15,
+  "confidence": 0.1,
   "imgsz": 512,
   "device": "intel:cpu",
   "model_path": "yolo26n-seg_openvino_model",

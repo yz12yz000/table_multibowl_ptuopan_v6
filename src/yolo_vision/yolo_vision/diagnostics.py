@@ -3,6 +3,40 @@ import cv2
 import numpy as np
 
 
+def projection_metadata(xyz, image_header, cloud_header, camera_info=None):
+    """Freeze the rectified camera model used by this observation, not a later frame."""
+    height, width = xyz.shape[:2]
+    if camera_info is not None:
+        k = np.asarray(camera_info.k, dtype=float).reshape(3, 3)
+        origin = 'camera_info'
+    else:
+        # Organized XYZ preserves pixel correspondence. Recover a pinhole model
+        # only when the points demonstrably follow one; never guess intrinsics.
+        yy, xx = np.nonzero(np.isfinite(xyz).all(axis=2) & (xyz[:, :, 2] > 0))
+        if len(xx) < 30:
+            raise ValueError('projection_insufficient_points')
+        indices = np.linspace(0, len(xx) - 1, min(len(xx), 2048), dtype=int)
+        yy, xx = yy[indices], xx[indices]
+        points = xyz[yy, xx]
+        pairs = []
+        for channel, pixels in ((0, xx), (1, yy)):
+            matrix = np.c_[points[:, channel] / points[:, 2], np.ones(len(points))]
+            fit, _, rank, _ = np.linalg.lstsq(matrix, pixels, rcond=None)
+            if rank != 2 or np.max(np.abs(matrix @ fit - pixels)) > .25:
+                raise ValueError('projection_not_rectified_pinhole')
+            pairs.append(fit)
+        (fx, cx), (fy, cy) = pairs
+        k = np.array([[fx, 0., cx], [0., fy, cy], [0., 0., 1.]])
+        origin = 'organized_xyz_verified'
+    if not np.isfinite(k).all() or k[0, 0] <= 0 or k[1, 1] <= 0:
+        raise ValueError('invalid_projection_intrinsics')
+    def stamp(header):
+        return int(header.stamp.sec * 10**9 + header.stamp.nanosec)
+    return dict(model='rectified_pinhole', origin=origin, width=width, height=height,
+                k=k.ravel().tolist(), frame_id=cloud_header.frame_id,
+                source_stamp_ns=stamp(cloud_header), image_stamp_ns=stamp(image_header))
+
+
 def detection_debug(bgr, results, xyz):
     combined = np.zeros(bgr.shape[:2], dtype=np.uint8)
     overlay = bgr.copy()

@@ -12,6 +12,27 @@ class SegmentationResult:
     confidence: float
 
 
+@dataclass(frozen=True)
+class TraySegmentationConfig:
+    """Independent tray model; always infer the complete synchronized image."""
+
+    model_path: str
+    target_class: str
+    confidence: float
+    imgsz: int
+    device: str
+    inference_roi: None = None
+    inference_tile_size: int = 0
+
+
+def _validate_target_metadata(task, names, target_class):
+    if task != "segment":
+        raise ValueError("tray_yolo_model_requires_segmentation")
+    names = list(names.values()) if isinstance(names, dict) else names
+    if not isinstance(names, (list, tuple)) or target_class not in names:
+        raise ValueError("tray_yolo_model_missing_target_class:" + target_class)
+
+
 def _mask_for(result, index, image_shape):
     mask = result.masks.data[index].cpu().numpy()
     if mask.shape != tuple(image_shape[:2]):
@@ -47,14 +68,38 @@ def select_targets(result, target_class, image_shape):
 
 
 class Segmenter:
-    def __init__(self, model_path, config):
+    def __init__(self, model_path, config, *, require_target=False):
         path = Path(model_path)
-        if not path.is_dir() or not list(path.glob("*.xml")) or not list(path.glob("*.bin")):
+        # Reject absent local weights before YOLO can interpret the name as a
+        # downloadable asset. The original bowl OpenVINO path remains valid.
+        if not path.exists():
+            raise ValueError(f"segmentation_model_missing:{path}")
+        is_openvino = path.is_dir()
+        if is_openvino and (not list(path.glob("*.xml")) or not list(path.glob("*.bin"))):
             raise ValueError(f"openvino_model_missing:{path}")
+        if not is_openvino and path.suffix.lower() != ".pt":
+            raise ValueError(f"segmentation_model_format_not_supported:{path}")
+        if require_target and is_openvino:
+            # An exported backend does not infer its task from constructor
+            # arguments. Validate the export metadata rather than force a
+            # detection model to masquerade as a segmentation model.
+            import yaml
+
+            metadata_path = path / "metadata.yaml"
+            if not metadata_path.is_file():
+                raise ValueError("tray_yolo_model_metadata_missing")
+            with metadata_path.open(encoding="utf-8") as stream:
+                metadata = yaml.safe_load(stream)
+            if not isinstance(metadata, dict):
+                raise ValueError("tray_yolo_model_metadata_invalid")
+            _validate_target_metadata(metadata.get("task"), metadata.get("names"), config.target_class)
         from ultralytics import YOLO
 
         self.config = config
         self.model = YOLO(str(path), task="segment")
+        if require_target and not is_openvino:
+            # For .pt, Ultralytics reads the checkpoint's actual task/classes.
+            _validate_target_metadata(self.model.task, self.model.names, config.target_class)
 
     def predict_all(self, bgr):
         if bgr.ndim != 3 or bgr.shape[2] != 3 or bgr.dtype != np.uint8:

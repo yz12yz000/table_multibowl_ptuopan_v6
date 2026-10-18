@@ -277,6 +277,18 @@ def _main_locked():
         assert arm.check_ready(15.)
         actual = arm.read_pose()
         print('Actual grasp_center:', actual, flush=True)
+        # Verify local feedback FK at different joint configurations against
+        # the real MoveIt model, including the fixed tool transform.
+        from grasp_executor.cartesian import pose_error
+        measured = arm._state(stationary=True)
+        for index in range(12):
+            values = [value + .2 * math.sin(index + joint) for joint, value in enumerate(initial_positions)]
+            sample = arm._state_at(measured, JOINTS, values)
+            reference = arm._fk(sample, time.monotonic() + 5.)
+            local = arm.feedback_kinematics.pose(JOINTS, values)
+            distance, angle = pose_error(local, reference)
+            assert distance < 1e-6 and angle < 1e-6, (distance, angle)
+        print('PASS local joint feedback FK agrees with MoveIt at 12 configurations', flush=True)
         # Seed the old, blocking objects as if MoveIt remained open across an
         # upgrade. Production cleanup must remove them without reading a model.
         def seed_legacy_scene():
@@ -397,11 +409,24 @@ def _main_locked():
         positions[:] = initial_positions
         time.sleep(.4)
         arm.plans, arm.next_segment = place_plans, 0
-        result = execute_grasp_place(approach, grasp, place_ready, place_drop,
-                                     HardwareInterfaces(arm, fake_gripper), arm.config)
+        original_tf_pose = arm._read_tf_pose
+        dropout_reads = []
+        def dropout_at_place():
+            if arm.active is not None and arm.active.name == 'place_drop':
+                dropout_reads.append(True)
+                arm.tf_feedback_age = .8
+                raise RuntimeError('stale_robot_tf_feedback')
+            return original_tf_pose()
+        arm._read_tf_pose = dropout_at_place
+        try:
+            result = execute_grasp_place(approach, grasp, place_ready, place_drop,
+                                         HardwareInterfaces(arm, fake_gripper), arm.config)
+        finally:
+            arm._read_tf_pose = original_tf_pose
         assert result.status == 'success', result
+        assert dropout_reads
         assert len(fake_goals) == 9 and fake_gripper.commands == ['Open', 'Close', 'Open', 'Close', 'Open']
-        print('PASS simulated six-segment grasp/place execution, release and retreat', flush=True)
+        print('PASS simulated six-segment grasp/place releases despite TF dropout at place_drop', flush=True)
         # End-to-end three-object batch: second preview starts at the previous
         # retreat, and execution replans from freshly simulated feedback.
         from copy import deepcopy
@@ -467,6 +492,28 @@ def _main_locked():
         preview_arm.prepare_plans = original_prepare
         candidate_checks = check_candidate_rounds(node, preview_arm, arm, fake_gripper,
             positions, initial_positions, batch, fake_goals, directory)
+        # Seven-segment task includes the exact taught joint branch in preview
+        # and only reports success after the measured return has completed.
+        positions[:] = initial_positions
+        time.sleep(.4)
+        old_config = arm.config
+        arm.config = replace(arm.config, place_drop_distance=.1,
+            return_home_joint_positions=dict(zip(JOINTS, initial_positions)),
+            return_home_position=dict(zip('xyz', actual.position)),
+            return_home_orientation=dict(zip('xyzw', actual.orientation)))
+        home_drop = build_place_drop_pose(place_ready, arm.config)
+        assert arm.prepare_plans(approach, grasp, place_ready, home_drop, place_ready)
+        assert len(arm.plans) == 7 and arm.plans[-1].name == 'return_home'
+        goals_before, commands_before = len(fake_goals), len(fake_gripper.commands)
+        result = execute_grasp_place(approach, grasp, place_ready, home_drop,
+                                     HardwareInterfaces(arm, fake_gripper), arm.config)
+        assert result.status == 'success', result
+        assert len(fake_goals)-goals_before == 7
+        assert fake_gripper.commands[commands_before:] == ['Open','Close','Open']
+        assert max(abs(a-b) for a,b in zip(positions,initial_positions)) < arm.config.start_joint_tolerance
+        assert arm.next_segment == 7
+        arm.config = old_config
+        print('PASS seven-segment simulated grasp/place with 10 cm drop and exact joint return home', flush=True)
         # Reset synthetic feedback and use preview mode again for rejection tests.
         arm.close()
         arm = preview_arm
@@ -509,11 +556,12 @@ def _main_locked():
             print('PASS real collision rejection:', exc, flush=True)
         else: raise AssertionError('Colliding start unexpectedly accepted')
         assert not arm.commanded
-        (directory/'result.json').write_text(json.dumps({'passed':15,'hardware_connected':False,
+        (directory/'result.json').write_text(json.dumps({'passed':16,'hardware_connected':False,
             'domain':os.environ['ROS_DOMAIN_ID'], 'batch_grasp_offset':batch_offset,
+            'local_feedback_fk_configurations':12, 'place_tf_dropout_released':True,
             'offset_preview_matches_execution':True, 'object_count':3, 'executed_segments':18,
             'candidate_rounds':candidate_checks}))
-        print('15 MoveIt integration checks passed; hardware was not connected.', flush=True)
+        print('16 MoveIt integration checks passed; hardware was not connected.', flush=True)
     finally:
         if arm: arm.close()
         executor.shutdown(timeout_sec=2)

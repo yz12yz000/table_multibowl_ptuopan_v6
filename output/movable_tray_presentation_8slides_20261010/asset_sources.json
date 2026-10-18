@@ -1,0 +1,46 @@
+{
+  "source_deck": "output/movable_tray_presentation_20261010/Movable_Tray_Table_Clearing_EN_CN.pptx",
+  "source_slide_mapping": [
+    [
+      1,
+      3
+    ],
+    [
+      2,
+      5,
+      6
+    ],
+    [
+      3,
+      7,
+      8
+    ],
+    [
+      4,
+      9,
+      10
+    ],
+    [
+      5,
+      11
+    ],
+    [
+      6,
+      12
+    ],
+    [
+      7,
+      13
+    ],
+    [
+      8,
+      14,
+      15
+    ]
+  ],
+  "diagrams": "Editable native PowerPoint shapes; schematic, not physical trajectories",
+  "tray_localization": "YOLO instance segmentation + RGB-D; editable schematic, no trained tray weights provided",
+  "plots": "Reconstructed from the current YOLO-version offline synthetic observations",
+  "evidence": "debug_output/clear_table_validation/yolo_20261010",
+  "hardware_validated": false
+}

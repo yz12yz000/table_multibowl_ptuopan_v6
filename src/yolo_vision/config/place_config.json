@@ -5,7 +5,7 @@
   "depth_info_topic": "/camera/depth/camera_info",
   "output_topic": "/yolo_vision/object_cloud",
   "target_class": "bowl",
-  "confidence": 0.15,
+  "confidence": 0.1,
   "imgsz": 512,
   "device": "intel:cpu",
   "model_path": "yolo26n-seg_openvino_model",
@@ -17,8 +17,14 @@
   "expected_height": 800,
   "publish_debug": true,
   "max_source_age": 10.0,
-  "inference_tile_size": 640,
+  "inference_roi": [
+    220,
+    300,
+    1000,
+    700
+  ],
+  "inference_tile_size": 512,
   "tile_overlap": 0.5,
   "tile_mask_iou": 0.5,
-  "tile_single_confidence": 0.35
+  "tile_single_confidence": 0.1
 }

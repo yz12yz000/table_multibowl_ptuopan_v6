@@ -107,6 +107,29 @@ class RecordingInterfaces(FakeInterfaces):
         return super().move_linear(pose, timeout)
 
 
+@pytest.mark.parametrize('failure', [0, 6, 7])
+def test_return_home_occurs_only_after_release_and_retreat(tmp_path, failure):
+    from grasp_executor.moveit_ros import JOINTS
+    from grasp_executor.grasp import build_return_home_pose
+    config = GraspConfig(plan_only=False, place_dwell_time=.001, execution_journal=str(tmp_path),
+        return_home_joint_positions=dict.fromkeys(JOINTS, 0.),
+        return_home_position=dict(x=.4,y=.2,z=.4),
+        return_home_orientation=dict(x=0.,y=1.,z=0.,w=0.))
+    interface = RecordingInterfaces(failure)
+    pose = Pose((.3,.1,.2),(0.,1.,0.,0.),'base_link','grasp_center')
+    result = run_batch_task([pose], 10**9, lambda:2*10**9, interface, config)
+    assert len(interface.moves) == (failure or 7)
+    assert interface.events.count('open') == 2
+    if failure:
+        assert result.status == 'failed' and result.completed_count == 0
+        assert interface.events[-1] == 'stop'
+        assert result.failed_step == ('retreating_from_place' if failure == 6 else 'returning_home')
+    else:
+        assert result.status == 'success' and result.completed_count == 1
+        assert interface.moves[-1] == build_return_home_pose(config)
+        assert interface.moves[-2] == interface.moves[3]
+
+
 def test_two_objects_order_preserved_orientation_drop_release_return(tmp_path):
     from dataclasses import replace
     c = GraspConfig(plan_only=False, place_dwell_time=.001, execution_journal=str(tmp_path))

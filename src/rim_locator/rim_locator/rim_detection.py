@@ -228,9 +228,9 @@ def _fit_wall(local, point, outward, radius, config):
                               wall_tilt_deg=math.degrees(math.asin(abs(normal[2]))))
 
 
-def _supported_walls(points, result, config):
+def _supported_walls(points, result, config, centre=None):
     """Yield one supported fit per observed contact, preserving search order."""
-    centre = np.median(points, axis=0)
+    centre = np.median(points, axis=0) if centre is None else centre
     rejected = Counter()
     first_reason = None
     attempts = 0
@@ -297,8 +297,8 @@ def _search_wall(points, result, config):
 
 
 def _make_pose_result(point, normal, local_points, wall_points, diagnostics, result, config):
-    if config.orientation_mode == 'wall_normal':
-        diagnostics['measured_wall_normal'] = normal.tolist()
+    if config.orientation_mode in ('wall_normal', 'circle_radial'):
+        diagnostics.setdefault('measured_wall_normal', normal.tolist())
         if config.max_tool_tilt_deg is not None:
             # Wall evidence validates the contact, but pinching the rim from
             # above need not tilt the entire tool to follow a sloping bowl wall.
@@ -328,7 +328,35 @@ def _make_pose_result(point, normal, local_points, wall_points, diagnostics, res
 def _grasp_candidates(points, config):
     points = filter_component(points, config)
     result = _locate_filtered_rim(points, config)
-    if config.orientation_mode == 'wall_normal':
+    circle = None
+    fallback = None
+    if config.orientation_mode == 'circle_radial':
+        from .circle_fit import CircleFitError, fit_rim_circle
+        try:
+            center_xy, circle = fit_rim_circle(result.candidates, config)
+        except CircleFitError as exc:
+            exc.diagnostics.update(rim_component_count=len(points), rim_z_top=float(result.z_top),
+                                   rim_z_min=float(result.candidates[:, 2].min()),
+                                   rim_z_max=float(result.candidates[:, 2].max()))
+            if (not config.circle_allow_wall_fallback or str(exc) not in (
+                    'pose_not_found:circle_insufficient_coverage',
+                    'pose_not_found:circle_insufficient_sectors')):
+                raise
+            fallback = {'circle_fallback_reason': str(exc), 'circle_fit_rejected': exc.diagnostics,
+                        'outside_finger_axis': config.outside_finger_axis,
+                        'method': 'supported_wall_fallback'}
+            # A short-arc centre must not steer the gripper. Use the measured
+            # wall direction; the full observed component determines its sign.
+            def fallback_contacts():
+                try:
+                    yield from _supported_walls(points, result, config)
+                except PoseNotFound as wall_error:
+                    raise PoseNotFound(str(wall_error), dict(wall_error.diagnostics, **fallback)) from wall_error
+            contacts = fallback_contacts()
+        else:
+            center = np.r_[center_xy, result.z_top]
+            contacts = _supported_walls(points, result, config, centre=center)
+    elif config.orientation_mode == 'wall_normal':
         contacts = _supported_walls(points, result, config)
     else:
         centre = np.median(points, axis=0)
@@ -345,7 +373,28 @@ def _grasp_candidates(points, config):
 
         contacts = vertical_contacts()
     accepted = []
+    radial_rejections = Counter()
     for point, normal, local, wall, diagnostics in contacts:
+        if fallback is not None:
+            diagnostics = dict(diagnostics, **fallback, measured_wall_normal=normal.tolist())
+            if config.outside_finger_axis == 'negative_y':
+                normal = -normal
+        if circle is not None:
+            radius_error = float(abs(np.linalg.norm(point[:2] - center_xy) - circle['circle_radius']))
+            outward = _outward(point, center)
+            wall_xy = normal[:2] / np.linalg.norm(normal[:2])
+            deviation = math.degrees(math.acos(float(np.clip(np.dot(wall_xy, outward[:2]), -1., 1.))))
+            if radius_error > config.circle_max_contact_error:
+                radial_rejections['circle_contact_off_rim'] += 1
+                continue
+            if deviation > config.circle_max_normal_deviation_deg:
+                radial_rejections['circle_wall_direction_mismatch'] += 1
+                continue
+            diagnostics = dict(diagnostics, **circle, measured_wall_normal=normal.tolist(),
+                               radial_wall_deviation_deg=deviation, radial_contact_error=radius_error,
+                               outside_finger_axis=config.outside_finger_axis,
+                               method='supported_wall_circle_radial')
+            normal = outward if config.outside_finger_axis == 'positive_y' else -outward
         # Stable spatial deduplication never displaces the first accepted pose.
         if any(np.linalg.norm(point - previous) < config.candidate_min_separation for previous in accepted):
             continue
@@ -354,6 +403,10 @@ def _grasp_candidates(points, config):
         yield candidate
         if len(accepted) >= config.max_grasp_candidates:
             return
+
+    if circle is not None and not accepted:
+        raise PoseNotFound('pose_not_found:circle_no_supported_radial_contact',
+                           dict(circle, radial_rejections=dict(radial_rejections)))
 
 
 def locate_grasp_candidates(points, config):

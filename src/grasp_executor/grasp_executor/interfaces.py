@@ -65,18 +65,24 @@ class ShellGripper:
                     self.process = None
 
     def check_ready(self, timeout):
-        # Listing an executable does not send any command to the gripper.
-        output = self._run('source "$1" && ros2 pkg executables hand_control', [], timeout)
-        if not any(line.split() == ["hand_control", "talker"] for line in output.splitlines()):
-            raise RuntimeError("hand_control_talker_missing")
+        # Query current register state before any arm movement. No open/close.
+        self._checked_command('Check', timeout)
         return True
+
+    def _checked_command(self, command, timeout):
+        helper = str(Path(__file__).with_name('gripper_command.py').resolve())
+        budget = timeout - 2.0  # Reserve ROS startup/shutdown within outer deadline.
+        if budget <= 0:
+            raise TimeoutError('gripper_timeout')
+        output = self._run(
+            'source "$1" && exec /usr/bin/python3 "$2" "$3" --timeout "$4" --settle-time "$5"',
+            [helper, command, str(budget), str(self.settle_time)], timeout)
+        print('gripper_feedback: ' + output.strip(), flush=True)
 
     def command(self, command, timeout):
         if command not in ("Open", "Close"):
             raise ValueError("invalid_gripper_command")
-        self._run('source "$1" && exec ros2 run hand_control talker "$2" 1', [command], timeout - self.settle_time)
-        if self.stopped.wait(self.settle_time):
-            raise RuntimeError("cancelled")
+        self._checked_command(command, timeout)
         return True
 
     def stop(self):

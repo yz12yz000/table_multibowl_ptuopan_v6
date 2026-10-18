@@ -11,6 +11,7 @@ from .grasp import (Pose, apply_grasp_offset, bounded_call, build_approach_pose,
                     build_place_drop_pose, build_place_ready_pose, claim_candidate_object,
                     execute_grasp_place, validate_pose, validate_target)
 from .planning_errors import CandidatePlanRejected
+from .tray_placement import candidate_place_ready
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,11 @@ def run_candidate_group_task(batch, now_ns, interfaces, config, *, on_state=None
             raise ValueError("candidate_context_required")
         if not config.plan_only and len(batch["objects"]) != 1:
             raise ValueError("execution_requires_single_object_group")
+        if config.tray_placement is not None:
+            p = config.tray_placement
+            if (len(batch['objects']) != 1 or p['object_id'] != batch['objects'][0]['object_id']
+                    or p['source_stamp_ns'] != batch['source_stamp_ns']):
+                raise ValueError('tray_placement_observation_mismatch')
         if not config.place_retreat:
             raise ValueError("candidate_task_requires_place_retreat")
         remaining(config.motion_timeout)
@@ -113,6 +119,7 @@ def run_candidate_group_task(batch, now_ns, interfaces, config, *, on_state=None
             drop = build_place_drop_pose(ready, config)
             validate_pose(ready, config)
             validate_pose(drop, config)
+            baseline_ready = ready
             deadline = min(task_deadline, time.monotonic() + 7 * config.planning_timeout)
             selected = False
             for candidate in group["candidates"]:
@@ -130,6 +137,8 @@ def run_candidate_group_task(batch, now_ns, interfaces, config, *, on_state=None
                     try:
                         grasp = apply_grasp_offset(pose_of(candidate), config)
                         approach = build_approach_pose(grasp, config)
+                        ready = candidate_place_ready(grasp, baseline_ready, config)
+                        drop = build_place_drop_pose(ready, config)
                     except ValueError as exc:
                         # An otherwise valid contact outside configured bounds
                         # is infeasible. Schema/frame/orientation faults remain fatal.

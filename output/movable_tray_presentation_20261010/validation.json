@@ -1,0 +1,11 @@
+{
+  "slide_count": 17,
+  "pdf_page_count": 17,
+  "notes_parts": 17,
+  "shape_and_text_bounds_errors": [],
+  "visual_review": "All 17 rendered pages inspected in contact sheet.",
+  "method": "YOLO segmentation + same-frame RGB-D",
+  "evidence": "debug_output/clear_table_validation/yolo_20261010/summary.json",
+  "test_total": 888,
+  "hardware_validated": false
+}

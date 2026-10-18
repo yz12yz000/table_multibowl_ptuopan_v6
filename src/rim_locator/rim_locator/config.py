@@ -47,6 +47,19 @@ class RimConfig:
     max_normal_change_deg: float = 12.0
     max_tool_tilt_deg: float | None = None  # None follows wall; 0 is vertical rim pinch.
 
+    # circle_radial uses the same supported contacts, with an explicit signed
+    # closing direction. +Y/-Y refer to physical tool-frame sides, not screen left.
+    outside_finger_axis: str = "positive_y"
+    circle_min_radius: float = .04
+    circle_max_radius: float = .15
+    circle_inlier_distance: float = .004
+    circle_min_inlier_ratio: float = .65
+    circle_max_residual: float = .0025
+    circle_min_coverage_deg: float = 120.
+    circle_allow_wall_fallback: bool = False
+    circle_max_contact_error: float = .001
+    circle_max_normal_deviation_deg: float = 20.
+
     def __post_init__(self):
         if type(self.max_grasp_candidates) is not int or not 1 <= self.max_grasp_candidates <= 32:
             raise ValueError("invalid_config:max_grasp_candidates")
@@ -79,8 +92,24 @@ class RimConfig:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (float, int)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"invalid_config:{name}")
-        if self.orientation_mode not in ("vertical", "wall_normal") or self.max_wall_tilt_deg >= 90:
+        if self.orientation_mode not in ("vertical", "wall_normal", "circle_radial") or self.max_wall_tilt_deg >= 90:
             raise ValueError("invalid_orientation_config")
+        if self.outside_finger_axis not in ('positive_y', 'negative_y'):
+            raise ValueError('invalid_config:outside_finger_axis')
+        if type(self.circle_allow_wall_fallback) is not bool:
+            raise ValueError('invalid_config:circle_allow_wall_fallback')
+        for name in ('circle_min_radius', 'circle_max_radius', 'circle_inlier_distance',
+                     'circle_min_inlier_ratio', 'circle_max_residual', 'circle_min_coverage_deg',
+                     'circle_max_contact_error', 'circle_max_normal_deviation_deg'):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError('invalid_config:' + name)
+        if (self.circle_min_radius >= self.circle_max_radius or self.circle_min_inlier_ratio > 1
+                or not 120 <= self.circle_min_coverage_deg < 360
+                or self.circle_max_normal_deviation_deg >= 90):
+            raise ValueError('invalid_config:circle_limits')
+        if self.orientation_mode == 'circle_radial' and self.max_tool_tilt_deg != 0.:
+            raise ValueError('circle_radial_requires_vertical_tool')
         if self.max_normal_change_deg >= 90 or self.wall_depth <= self.min_height_band:
             raise ValueError("invalid_wall_search_config")
         if self.min_height_band > self.max_height_band or self.adaptive_height_fraction > 1:
